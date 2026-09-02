@@ -1,0 +1,20 @@
+# Telegram client — MTProto, not the Bot API.
+# This is the whole reason big files work: the cloud Bot API caps uploads at
+# 50 MB, MTProto allows 2 GB (4 GB on a Premium account).
+pyrogram==2.0.106
+tgcrypto==1.2.5
+
+# HTTP with a real browser TLS fingerprint. Plain `requests` gets 403'd by the
+# CDNs these links live behind.
+curl-cffi==0.7.4
+
+# QR rendering for the payment screen. The Node gateway hands us a UPI URI and
+# an SVG; Telegram cannot send SVG as a photo, so we draw our own PNG.
+qrcode==7.4.2
+pillow==10.4.0
+
+# VPS status panel in the admin menu.
+psutil==6.0.0
+
+# Password-protected ZIPs (AES). The stdlib zipfile only handles legacy ZipCrypto.
+pyzipper==0.3.6

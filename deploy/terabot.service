@@ -1,0 +1,33 @@
+[Unit]
+Description=TeraBot — Telegram video bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=terabot
+Group=terabot
+WorkingDirectory=/opt/terabot
+EnvironmentFile=/opt/terabot/.env
+ExecStart=/opt/terabot/.venv/bin/python -m bot.main
+
+# A restart must never leave a half-written file behind: SIGTERM is handled and
+# the queue refunds whatever it was working on before exiting.
+KillSignal=SIGTERM
+TimeoutStopSec=60
+Restart=always
+RestartSec=5
+
+# The bot only ever needs its own directory.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/terabot/data /opt/terabot/downloads
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=terabot
+
+[Install]
+WantedBy=multi-user.target

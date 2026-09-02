@@ -1,0 +1,33 @@
+# ---- SECRETS: never commit these ----
+.env
+.env.local
+*.session
+*.session-journal
+paysvc/data/
+data/
+
+# ---- runtime ----
+downloads/
+tmp/
+*.db
+*.db-wal
+*.db-shm
+*.log
+
+# ---- python ----
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+*.egg-info/
+
+# ---- node ----
+node_modules/
+npm-debug.log*
+
+# ---- os / editor ----
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
