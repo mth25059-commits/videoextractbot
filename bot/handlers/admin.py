@@ -18,6 +18,7 @@ from pyrogram.types import CallbackQuery, Message
 
 from .. import credits, db, keyboards as kb, queue as jobq, state, ui
 from ..config import cfg
+from . import _gate
 
 log = logging.getLogger(__name__)
 
@@ -258,14 +259,17 @@ def register(app: Client, jobs: jobq.Queue) -> None:
         await cq.message.edit_text("\n".join(lines), reply_markup=kb.admin_menu())
 
     @app.on_message(filters.private & filters.text
-                    & ~filters.command(["start", "balance"]))
+                    & ~filters.command(["start", "balance"])
+                    & _gate.in_mode("admin_give_user", "admin_give_amount"))
     async def admin_typing(client: Client, message: Message) -> None:
-        """Two-step give-credit prompt. Ignores anything not addressed to it."""
+        """Two-step give-credit prompt. The mode gate does the addressing (see _gate)."""
         user_id = message.from_user.id
         if not _is_admin(user_id):
+            # Belt and braces: the mode is only ever set by an admin-only callback,
+            # but authority is checked on from_user.id in every handler regardless.
             return
         entry = state.get_mode(user_id)
-        if not entry or entry[0] not in ("admin_give_user", "admin_give_amount"):
+        if not entry:            # swept between the filter and here — very unlikely
             return
         mode, payload = entry
         text = (message.text or "").strip()

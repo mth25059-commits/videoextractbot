@@ -113,11 +113,17 @@ for the full list with comments. The ones that matter most:
 python tests/test_phase2.py     # media/provider helpers
 python tests/test_archive.py    # ZIP pricing and path safety
 python tests/test_queue.py      # the money path: charge, refund, cancel, restart
+python tests/test_gate.py       # text handlers do not eat each other's messages
 ```
 
 `test_queue.py` stubs Pyrogram, so it runs without the dependency installed. It
 exists to hold one property: **a user is never charged for a video they did not
 receive.**
+
+`test_gate.py` holds the other easily-broken one: Pyrogram runs a single message
+handler per group, so every handler that wants private text is gated on the mode
+it owns (`bot/handlers/_gate.py`). Without that the first one registered swallows
+every message and the rest are dead code.
 
 ## Layout
 
@@ -135,5 +141,5 @@ bot/
   ui.py          text, progress bars, throttling
   keyboards.py   every inline keyboard
   providers/     the plug-in slot for link sources
-  handlers/      /start, ZIP, admin
+  handlers/      /start, ZIP, admin — text handlers gated by _gate.py
 ```

@@ -23,6 +23,7 @@ from pyrogram.types import CallbackQuery, Message
 
 from .. import archive, credits, keyboards as kb, media, queue as jobq, state, ui, uploader
 from ..config import cfg
+from . import _gate
 
 log = logging.getLogger(__name__)
 
@@ -231,11 +232,13 @@ def register(app: Client, jobs: jobq.Queue) -> None:
             return
         await _accept_archive(client, message, jobs)
 
-    @app.on_message(filters.private & filters.text & ~filters.command(["start", "balance"]))
+    @app.on_message(filters.private & filters.text
+                    & ~filters.command(["start", "balance"])
+                    & _gate.in_mode("await_zip_password"))
     async def maybe_password(client: Client, message: Message) -> None:
-        """Only claims the message when a locked archive is waiting on a password."""
+        """Only reached while a locked archive is waiting on a password (see _gate)."""
         entry = state.get_mode(message.from_user.id)
-        if not entry or entry[0] != "await_zip_password":
+        if not entry:            # swept between the filter and here — very unlikely
             return
         _, payload = entry
         zip_path = Path(payload["zip_path"])
