@@ -128,6 +128,11 @@ class Config:
     show_soon_button: bool = False
     soon_button_label: str = "🔥  Fap"
 
+    # terabox: the operator's own logged-in cookie. Anonymous listing is refused
+    # for most links, so with this empty the service says so instead of charging.
+    terabox_cookie: str = ""
+    terabox_max_files_per_link: int = 10
+
     # misc
     proxies: tuple[str, ...] = field(default=())
 
@@ -170,6 +175,8 @@ def load() -> Config:
         payment_window_minutes=_int("PAYMENT_WINDOW_MINUTES", 10),
         show_soon_button=_bool("SHOW_SOON_BUTTON", False),
         soon_button_label=os.environ.get("SOON_BUTTON_LABEL", "🔥  Fap").strip() or "🔥  Fap",
+        terabox_cookie=os.environ.get("TERABOX_COOKIE", "").strip(),
+        terabox_max_files_per_link=_int("TERABOX_MAX_FILES_PER_LINK", 10),
         proxies=_list("PROXIES"),
     )
 

@@ -20,7 +20,7 @@ from pyrogram import Client
 
 from . import db, media
 from .config import ConfigError, cfg
-from .handlers import admin, start as start_handlers, zipfiles
+from .handlers import admin, start as start_handlers, terabox, zipfiles
 from .queue import Queue
 
 logging.basicConfig(
@@ -47,8 +47,8 @@ def register_all(app: Client, jobs: Queue) -> None:
     start_handlers.register(app)
     admin.register(app, jobs)
     zipfiles.register(app, jobs)
+    terabox.register(app, jobs)
     # Registered on their own branches:
-    #   terabox.register(app, jobs)     -> feat/terabox
     #   payment.register(app)           -> feat/payments
     #   soon.register(app)              -> feat/faphouse-button
 

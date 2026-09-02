@@ -66,6 +66,46 @@ merged, or not, on its own:
 git checkout main && git merge feat/terabox feat/payments
 ```
 
+### This branch
+
+`feat/terabox` adds the link resolver
+([bot/providers/terabox.py](bot/providers/terabox.py)) and its batch handler
+([bot/handlers/terabox.py](bot/handlers/terabox.py)).
+
+```
+/s/1abc…  ──►  surl  ──►  /share/list  ──►  dlink  ──►  the file
+```
+
+Three things it depends on, in the order they usually break:
+
+- **`TERABOX_COOKIE`** — your own `ndus` cookie. Terabox refuses to list most
+  share links anonymously, so with this empty the service says it is not set up
+  instead of charging anyone. It expires; `errno -6` in the log means replace it.
+- **A browser TLS fingerprint** — requests go through `curl_cffi` with
+  `impersonate="chrome124"`. Terabox's WAF rejects Python's handshake before it
+  reads a single header, and the failure looks exactly like a bad cookie.
+- **`dlink` is not the file** — it is a signed redirect, valid for minutes, tied
+  to the cookie and User-Agent that asked for it. It is resolved per job, never
+  cached.
+
+**No quality menu.** The original upload is the highest quality there is, so a
+link resolves to one stream and the bot takes it. The `/api/streaming` HLS
+transcode is a fallback for when `dlink` is refused, and Terabox caps it at
+1080p — which is why it is second choice.
+
+**Resolution runs on a worker, not at the door.** Ten links would otherwise mean
+ten API round-trips before the user saw anything, and one dead link would hold up
+the other nine. The door counts links and checks the balance; each job resolves,
+fetches and uploads on its own, so a 40 MB clip is not stuck behind a 1.8 GB film.
+
+A share link pointing at a folder still costs one credit; `TERABOX_MAX_FILES_PER_LINK`
+(default 10) bounds what a single credit can pull.
+
+The request layer has not been run against the live API from this repo — there is
+no cookie here. `tests/test_terabox.py` covers link matching, the five share-URL
+shapes and the `share/list` parsing against recorded response shapes; the first
+real link is what shakes out the rest.
+
 ## Install
 
 Needs Python 3.11+, ffmpeg, and (for payments) Node 18+.
@@ -114,6 +154,7 @@ python tests/test_phase2.py     # media/provider helpers
 python tests/test_archive.py    # ZIP pricing and path safety
 python tests/test_queue.py      # the money path: charge, refund, cancel, restart
 python tests/test_gate.py       # text handlers do not eat each other's messages
+python tests/test_terabox.py    # link matching and share-list parsing
 ```
 
 `test_queue.py` stubs Pyrogram, so it runs without the dependency installed. It
