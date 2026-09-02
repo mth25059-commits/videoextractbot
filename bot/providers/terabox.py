@@ -79,6 +79,18 @@ ERRNO_HELP = {
     2: "Terabox could not read that link.",
     105: "That is not a share link Terabox recognises.",
     117: "That link needs a password, which is not supported yet.",
+    # Measured against a live share on 3 September 2026 with no cookie at all:
+    # `/share/list` answers {"code": 460020, "errmsg": "need verify"} and
+    # `/api/shorturlinfo` answers {"errno": 400210, "errmsg": "need verify_v2"}.
+    # A signed-out session used to get a real file list; it no longer does, which
+    # is also why every public "terabox downloader" worker returns 500 now. Same
+    # meaning as -6 for our purposes: the cookie is missing or no longer signed in.
+    460020: "Terabox will not serve this link to a signed-out session. The "
+            "TERABOX_COOKIE is missing or has expired — sign in again and "
+            "replace it.",
+    400210: "Terabox will not serve this link to a signed-out session. The "
+            "TERABOX_COOKIE is missing or has expired — sign in again and "
+            "replace it.",
 }
 
 
@@ -131,7 +143,10 @@ def parse_list(payload: dict, *, only_videos: bool = True) -> list[Item]:
     if not isinstance(payload, dict):
         raise ResolveError("Terabox sent something unreadable.")
 
-    errno = payload.get("errno", 0)
+    # `errno` is the documented field, but the WAF replies with `code` instead and
+    # no `errno` at all — so reading only `errno` turned "need verify" into an
+    # empty file list and a puzzling "nothing to download" for the user.
+    errno = payload.get("errno") or payload.get("code") or 0
     if errno:
         raise ResolveError(ERRNO_HELP.get(
             int(errno), f"Terabox refused that link (error {errno})."))
@@ -187,6 +202,27 @@ class Terabox(Provider):
             return False
         return bool(re.search(r"/s/[A-Za-z0-9_-]+", parsed.path)
                     or "surl=" in (parsed.query or ""))
+
+    def unavailable(self) -> str:
+        """
+        Why this provider cannot resolve anything at all right now, or "".
+
+        `_session()` refuses the same case, but it runs on a worker — after the
+        credit has been taken. It is refunded, so no money is lost, yet "one credit
+        gone, an error, credit back" is a rotten answer to something that was never
+        going to work. Cheap enough to ask at the door, so the door asks.
+
+        There is no cookieless path to fall back to. Terabox now answers a
+        signed-out `/share/list` with `code 460020 need verify` (measured
+        3 September 2026), which is why every public terabox-downloader worker
+        returns 500 — the cookie is the only way in.
+        """
+        if not cfg.terabox_cookie:
+            return ("🔧 <b>Terabox is not switched on yet</b>\n\n"
+                    "The bot still needs its Terabox sign-in "
+                    "(<code>TERABOX_COOKIE</code>) before it can fetch anything. "
+                    "<b>Nothing was charged.</b>")
+        return ""
 
     # --- the network half ----------------------------------------------------
 

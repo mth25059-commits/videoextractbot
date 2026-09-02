@@ -250,6 +250,12 @@ def register(app: Client, jobs: jobq.Queue) -> None:
 
     @app.on_callback_query(filters.regex(r"^mode:terabox$"))
     async def open_terabox(client: Client, cq: CallbackQuery) -> None:
+        blocked = terabox.unavailable()
+        if blocked:
+            # Say so before the prompt, not after ten links have been pasted.
+            await cq.answer()
+            await cq.message.edit_text(blocked, reply_markup=kb.back_to_menu("◀  Menu"))
+            return
         state.set_mode(cq.from_user.id, MODE)
         await cq.answer()
         await cq.message.edit_text(PROMPT, reply_markup=kb.back_to_menu("◀  Menu"),
@@ -273,6 +279,13 @@ def register(app: Client, jobs: jobq.Queue) -> None:
             return
 
         state.clear_mode(user_id)
+        blocked = terabox.unavailable()
+        if blocked:
+            # The mode may have been opened before the cookie was cleared, and this
+            # is the last point before a credit moves.
+            await message.reply_text(blocked, reply_markup=kb.back_to_menu("◀  Menu"))
+            return
+
         trimmed = links[:cfg.max_links_per_batch]
         cost = len(trimmed) * cfg.cost_terabox_per_link
         have = credits.balance(user_id)

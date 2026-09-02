@@ -21,6 +21,10 @@ os.environ.setdefault("API_ID", "1234")
 os.environ.setdefault("API_HASH", "x" * 32)
 os.environ.setdefault("BOT_TOKEN", "1:test")
 os.environ.setdefault("ADMIN_IDS", "6100000001")
+# The handler refuses to charge for a provider that cannot run, so the door tests
+# need a cookie to be present. Its value is never used: nothing here goes near the
+# network.
+os.environ.setdefault("TERABOX_COOKIE", "ndus=not-a-real-cookie")
 
 # The provider module itself needs no pyrogram; base.py needs none either. The
 # *handler* does, and `register()` evaluates whole filter expressions, so the
@@ -122,6 +126,13 @@ MIXED = {
 EXPIRED_COOKIE = {"errno": -6, "request_id": 12345}
 GONE = {"errno": -9, "list": []}
 NO_LIST = {"errno": 0}
+
+# What a signed-out session actually gets today, measured against a live share on
+# 3 September 2026. Note the field: `code`, and no `errno` at all — reading only
+# `errno` turned this into "no files found".
+NEED_VERIFY = {"code": 460020, "errmsg": "need verify",
+               "request_id": 9143944801021818863}
+NEED_VERIFY_V2 = {"errno": 400210, "errmsg": "need verify_v2"}
 
 
 # --- the door: who pays for the batch ----------------------------------------
@@ -274,6 +285,32 @@ def test_batch_charges_whoever_pressed_the_button():
     check("charging the bot's id is a hard error",
           failure, f"ValueError: no such user: {BOT}")
 
+    # --- and with no cookie, the door charges nothing at all -----------------
+    # Every link would fail on the worker and be refunded, so no money is lost
+    # either way — but a credit that leaves and comes back looks like a bug to the
+    # person watching, and this is the state the live bot is in until the operator
+    # adds TERABOX_COOKIE.
+    held = credits.balance(USER)
+    rows_before = len(db.query("SELECT id FROM jobs"))
+    object.__setattr__(cfg, "terabox_cookie", "")       # cfg is frozen
+    try:
+        again = Chat(links[0], USER)
+        asyncio.run(app.handlers["got_links"](client, again))
+        check("the user is told it is not set up",
+              "not switched on" in again.replies[-1].text, True)
+        check("no Start button is offered",
+              [d for d in again.replies[-1].buttons() if d.startswith("job:go:")], [])
+        check("no credit moved", credits.balance(USER), held)
+        check("and no job row was written",
+              len(db.query("SELECT id FROM jobs")), rows_before)
+
+        press_dead = Press("mode:terabox")
+        asyncio.run(app.handlers["open_terabox"](client, press_dead))
+        check("the menu says so before asking for links",
+              "not switched on" in press_dead.message.text, True)
+    finally:
+        object.__setattr__(cfg, "terabox_cookie", "ndus=not-a-real-cookie")
+
     conn.close()
 
 
@@ -332,6 +369,14 @@ def main():
         check("and stays plain text (it is html-escaped downstream)",
               "<" in str(exc), False)
     check("errno 0 with no list is empty, not an error", tb.parse_list(NO_LIST), [])
+    raises("signed-out session (code 460020)", lambda: tb.parse_list(NEED_VERIFY))
+    raises("signed-out session (errno 400210)", lambda: tb.parse_list(NEED_VERIFY_V2))
+    for name, payload in (("code", NEED_VERIFY), ("errno", NEED_VERIFY_V2)):
+        try:
+            tb.parse_list(payload)
+        except ResolveError as exc:
+            check(f"the {name} form blames the cookie, not the link",
+                  "TERABOX_COOKIE" in str(exc), True)
 
     print("\n— the HLS fallback url —")
     url = tb.hls_url("/some folder/big.MP4")
