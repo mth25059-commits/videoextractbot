@@ -183,10 +183,24 @@ async def _deliver(client: Client, job: jobq.Job) -> None:
         shutil.rmtree(work, ignore_errors=True)
 
 
-async def _queue_batch(client: Client, message: Message, jobs: jobq.Queue,
-                       links: list[str]) -> None:
-    """One status message and one job per link, keeping whatever the balance covers."""
-    user_id = message.from_user.id
+async def _queue_batch(client: Client, message: Message, user_id: int,
+                       jobs: jobq.Queue, links: list[str]) -> None:
+    """
+    One status message and one job per link, keeping whatever the balance covers.
+
+    `user_id` is a parameter and not `message.from_user.id`, which is the bug this
+    signature exists to prevent. The only caller is a callback handler, and
+    `cq.message` is the message the *bot* sent — the one the confirm button is
+    attached to — so its `from_user` is the bot. Every link was then charged to the
+    bot's own id, which owns no row in `users`:
+
+        ValueError: no such user: 7200000002        credits.py:96, from submit()
+
+    and that lands after the jobs row is written and before anything is enqueued, so
+    no credit moves, no worker ever sees the job, and the status message below reads
+    "waiting for a free worker…" for ever. `message` is still the right thing to
+    reply to; it is only the identity that cannot come from it.
+    """
     pending: list[jobq.Job] = []
 
     for index, url in enumerate(links):
@@ -298,7 +312,8 @@ def register(app: Client, jobs: jobq.Queue) -> None:
             await cq.message.edit_text("📦 <b>Starting…</b>")
         except Exception:
             pass
-        await _queue_batch(client, cq.message, jobs, parked.payload["links"])
+        await _queue_batch(client, cq.message, cq.from_user.id, jobs,
+                           parked.payload["links"])
 
     @app.on_callback_query(filters.regex(r"^job:cancel:(?P<token>[\w-]+)$"))
     async def cancel_job(client: Client, cq: CallbackQuery) -> None:

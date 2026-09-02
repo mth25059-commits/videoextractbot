@@ -22,10 +22,47 @@ os.environ.setdefault("API_HASH", "x" * 32)
 os.environ.setdefault("BOT_TOKEN", "1:test")
 os.environ.setdefault("ADMIN_IDS", "6100000001")
 
-# The provider module itself needs no pyrogram; base.py needs none either.
+# The provider module itself needs no pyrogram; base.py needs none either. The
+# *handler* does, and `register()` evaluates whole filter expressions, so the
+# stub carries a filter object that answers `&` and `~` by shrugging.
+class _Stub:
+    """Stands in for a Pyrogram type: remembers how it was built, does nothing."""
+
+    def __init__(self, *args, **kwargs):
+        self.args, self.kwargs = args, kwargs
+
+
+class _Filter:
+    """Enough of a filter for `filters.private & filters.text & ~x` to evaluate."""
+
+    def __and__(self, _other):
+        return self
+
+    __rand__ = __or__ = __ror__ = __and__
+
+    def __invert__(self):
+        return self
+
+
 _pyrogram = types.ModuleType("pyrogram")
-_pyrogram.Client = type("Client", (), {})
+_pyrogram.Client = type("Client", (_Stub,), {})
+_pg_filters = types.ModuleType("pyrogram.filters")
+for _name in ("private", "text", "document", "group"):
+    setattr(_pg_filters, _name, _Filter())
+for _name in ("create", "regex", "command"):
+    setattr(_pg_filters, _name, lambda *_a, **_kw: _Filter())
+_pg_types = types.ModuleType("pyrogram.types")
+for _name in ("Message", "CallbackQuery",
+              "InlineKeyboardButton", "InlineKeyboardMarkup"):
+    setattr(_pg_types, _name, type(_name, (_Stub,), {}))
+_pg_errors = types.ModuleType("pyrogram.errors")
+_pg_errors.FloodWait = type("FloodWait", (Exception,), {"value": 0})
+_pyrogram.filters, _pyrogram.types, _pyrogram.errors = (
+    _pg_filters, _pg_types, _pg_errors)
 sys.modules.setdefault("pyrogram", _pyrogram)
+sys.modules.setdefault("pyrogram.filters", _pg_filters)
+sys.modules.setdefault("pyrogram.types", _pg_types)
+sys.modules.setdefault("pyrogram.errors", _pg_errors)
 
 from bot.providers import terabox as tb                     # noqa: E402
 from bot.providers.base import ResolveError                 # noqa: E402
@@ -85,6 +122,159 @@ MIXED = {
 EXPIRED_COOKIE = {"errno": -6, "request_id": 12345}
 GONE = {"errno": -9, "list": []}
 NO_LIST = {"errno": 0}
+
+
+# --- the door: who pays for the batch ----------------------------------------
+
+def test_batch_charges_whoever_pressed_the_button():
+    """
+    A batch starts from a *button*, and the message a button hangs on was sent by
+    the bot — so `cq.message.from_user` is the bot, never the human. Reading the
+    id off it charged every link to the bot's own id, which owns no row in
+    `users`, so `submit()` raised `ValueError: no such user: 7200000002` after
+    writing the jobs row and before enqueuing anything. No credit moved, no
+    worker ever saw the job, and the status message sat on "waiting for a free
+    worker…" for ever. The whole Terabox flow had never worked once.
+
+    Driven through the registered handlers, the real queue and a real (temporary)
+    database — paste, then press — because what broke was the wiring between the
+    callback handler and `credits.charge`. Calling `_queue_batch` directly with a
+    correct id would have passed on the broken code too.
+    """
+    import asyncio
+    import sqlite3
+    import tempfile
+
+    from bot import credits, db, state
+    from bot.config import cfg
+    from bot.handlers import terabox as handler
+    from bot.queue import Queue
+
+    path = Path(tempfile.mkdtemp(prefix="terabot-door-")) / "test.db"
+    conn = sqlite3.connect(path, check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    conn.executescript(db.SCHEMA)
+    conn.commit()
+    db._conn = conn
+
+    USER, BOT = 6100000001, 7200000002          # the human, and @videoextractkro_bot
+    credits.ensure(USER, "the operator", "operator")
+    opening = credits.balance(USER)
+
+    class Sent:
+        """Whatever a reply hands back. Records the last text and its buttons."""
+
+        def __init__(self, text, markup=None):
+            self.text, self.markup = text, markup
+
+        async def edit_text(self, text, reply_markup=None, **_kw):
+            self.text, self.markup = text, reply_markup
+
+        def buttons(self):
+            rows = self.markup.args[0] if self.markup else []
+            return [b.kwargs.get("callback_data") for row in rows for b in row]
+
+    class Chat:
+        def __init__(self, text, sender):
+            self.chat = types.SimpleNamespace(id=USER)
+            self.from_user = types.SimpleNamespace(id=sender)
+            self.text = text
+            self.replies: list[Sent] = []
+
+        async def reply_text(self, text, reply_markup=None, **_kw):
+            self.replies.append(Sent(text, reply_markup))
+            return self.replies[-1]
+
+        async def edit_text(self, text, reply_markup=None, **_kw):
+            self.text, self.markup = text, reply_markup
+
+    class Press:
+        """A CallbackQuery. `.message` is the bot's own message — the whole trap."""
+
+        def __init__(self, data):
+            self.data = data
+            self.from_user = types.SimpleNamespace(id=USER)
+            self.message = Chat("(the bot's own message)", BOT)
+            self.answers: list[str] = []
+
+        async def answer(self, text="", **_kw):
+            self.answers.append(text)
+
+    class FakeApp:
+        """Collects whatever `register()` decorates, by function name."""
+
+        def __init__(self):
+            self.handlers = {}
+
+        def _collect(self, *_a, **_kw):
+            def keep(fn):
+                self.handlers[fn.__name__] = fn
+                return fn
+            return keep
+
+        on_callback_query = on_message = _collect
+
+    class FakeClient:
+        async def send_message(self, *_a, **_kw):
+            pass
+
+    links = ["https://terabox.com/s/1aaa", "https://terabox.com/s/1bbb"]
+    client = FakeClient()
+    queue = Queue(client, workers=1)            # never started: nothing runs them
+    app = FakeApp()
+    handler.register(app, queue)
+
+    # 1. the human pastes the links — this message really is theirs
+    pasted = Chat(" and ".join(links), USER)
+    asyncio.run(app.handlers["got_links"](client, pasted))
+    offer = pasted.replies[-1]
+    check("the links are counted back", f"{len(links)} link(s) ready" in offer.text, True)
+    go = [d for d in offer.buttons() if d.startswith("job:go:")]
+    check("with one Start button", len(go), 1)
+
+    # 2. the human presses Start. `cq.message` is now the *bot's* message.
+    press = Press(go[0])
+    asyncio.run(app.handlers["start_batch"](client, press))
+    check("the press was acknowledged", press.answers, ["Starting…"])
+
+    rows = db.query("SELECT * FROM jobs ORDER BY id")
+    owners = sorted({r["user_id"] for r in rows})
+    check("one job per link", len(rows), len(links))
+    check("owned by the human who pressed Start", owners, [USER])
+    check("and never by the bot", BOT in owners, False)
+    check("both accepted, none failed at the door",
+          sorted({r["status"] for r in rows}), ["queued"])
+    check("both are waiting for a worker", queue.depth(), len(links))
+    check("charged once per link",
+          credits.balance(USER), opening - len(links) * cfg.cost_terabox_per_link)
+    check("every link got its own status message plus one summary",
+          len(press.message.replies), len(links) + 1)
+
+    # The cancel token has to be parked under the human too, or Cancel silently
+    # matches nobody — `cancel_job` looks it up with `state.peek(token, user_id)`.
+    # Draining the queue is also the proof that the jobs were *enqueued*: under
+    # the bug `submit()` raised before this line ever ran.
+    queued = [queue._q.get_nowait() for _ in range(len(links))]
+    check("each job carries a token owned by the human",
+          [state.peek(j.token, USER) is not None for j in queued],
+          [True] * len(links))
+    check("and that token does not answer to the bot",
+          [state.peek(j.token, BOT) for j in queued], [None] * len(links))
+    check("each job kept its own link", [j.source for j in queued], links)
+
+    # And the shape of the bug, so a revert cannot pass quietly: the id on the
+    # message really is the bot's, and charging it really does raise.
+    check("the message the button hangs on carries the bot's id",
+          press.message.from_user.id, BOT)
+    failure = None
+    try:
+        credits.charge(BOT, cfg.cost_terabox_per_link, "probe")
+    except Exception as exc:                    # noqa: BLE001 — the type is the point
+        failure = f"{type(exc).__name__}: {exc}"
+    check("charging the bot's id is a hard error",
+          failure, f"ValueError: no such user: {BOT}")
+
+    conn.close()
 
 
 def main():
@@ -163,6 +353,9 @@ def main():
     check("in the registry", REGISTRY.get("terabox") is tb.terabox, True)
     check("found by url", find_for("https://terabox.com/s/1abc") is tb.terabox, True)
     check("not found for a foreign url", find_for("https://example.com/x"), None)
+
+    print("\n— starting a batch charges the human, not the bot —")
+    test_batch_charges_whoever_pressed_the_button()
 
     print(f"\n{passed} passed, {failed} failed\n")
     return 1 if failed else 0
