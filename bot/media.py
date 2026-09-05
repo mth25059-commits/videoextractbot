@@ -266,16 +266,42 @@ async def fetch_to_mp4(
     proc = await asyncio.create_subprocess_exec(
         *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
     )
+    # One task per pipe, and never `proc.communicate()`. communicate() reads *both*
+    # streams, `_pump_progress` already owns stdout, and asyncio refuses a second
+    # reader of one stream outright — "read() called while another coroutine is
+    # already waiting for incoming data". The pump is created first so it always wins
+    # the waiter, which means communicate() raised on every single call: one failed
+    # job and one refund per video, on both routes that use this function.
+    #
+    # It survived 1590 assertions because every test replaces `fetch_to_mp4` wholesale
+    # (tests/test_fap.py:616 and six more), so this body only ever ran in production.
+    #
+    # Draining stderr in its own task is not tidiness either. ffmpeg's stderr pipe
+    # holds 64 KiB; a noisy stream fills it, ffmpeg blocks mid-write, and `proc.wait()`
+    # then waits for a process that is waiting for us.
     pump = asyncio.create_task(_pump_progress(proc, total_seconds, on_progress, cancelled))
+    errs = asyncio.create_task(proc.stderr.read())
+    timed_out = False
     try:
-        _, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-    except asyncio.TimeoutError:
-        proc.kill()
-        await proc.wait()
-        partial.unlink(missing_ok=True)
-        raise MediaError("Download ran past the time limit and was stopped.")
+        try:
+            await asyncio.wait_for(proc.wait(), timeout=timeout)
+        except asyncio.TimeoutError:
+            timed_out = True
+            proc.kill()
+            await proc.wait()
+        # The process is gone, so stderr is at EOF and this returns at once. The
+        # timeout is only so a pipe that never closes cannot hold a worker for ever.
+        try:
+            stderr = await asyncio.wait_for(errs, timeout=10)
+        except asyncio.TimeoutError:
+            stderr = b""
     finally:
         pump.cancel()
+        errs.cancel()
+
+    if timed_out:
+        partial.unlink(missing_ok=True)
+        raise MediaError("Download ran past the time limit and was stopped.")
 
     if cancelled and cancelled():
         partial.unlink(missing_ok=True)
