@@ -209,6 +209,45 @@ def _refund_part(job: Job) -> float:
     return back
 
 
+def refund_difference(job: Job, worth: float) -> float:
+    """
+    Give back the gap when what arrived is cheaper than what was charged. Returns it.
+
+    `_refund_part`'s rule — *pay for what arrived* — seen from the other end, for a job
+    that delivers one thing rather than a short batch. A Fap job is priced at the tap and
+    its stream is looked up again just before ffmpeg opens it, because the CDN's URLs are
+    signed and expire; the resolver can drop the exact rung between those two moments, and
+    the runner then delivers the best copy still within the price. Without this, a 1080p
+    tap that comes back as 720p keeps the 1080p charge — the bot quietly billing for one
+    thing and handing over another, which is the practice the operator's own menu rule exists to
+    prevent.
+
+    `job.cost` comes down with it, so the failure path stays whole: ffmpeg falling over
+    after this refunds the reduced cost, and the two together are exactly what was taken.
+    Cheaper is the only direction it moves. A `worth` above `job.cost` is a no-op, because
+    raising a price after the button was tapped is not a thing this bot does — `re_pick`
+    is what makes sure it cannot arise in the first place.
+    """
+    if job.cost <= 0 or worth <= 0:
+        return 0.0
+    back = round(job.cost - worth, 2)
+    if back <= 0:
+        return 0.0
+    try:
+        credits.refund(job.user_id, back, "refund — a cheaper copy than was paid for",
+                       ref=f"job:{job.row_id}" if job.row_id else None)
+    except Exception:
+        log.exception("DOWNGRADE REFUND FAILED for user %s job %s — needs manual fixing",
+                      job.user_id, job.row_id)
+        return 0.0
+    job.cost = round(job.cost - back, 2)
+    if job.row_id:
+        db.execute("UPDATE jobs SET cost = ? WHERE id = ?", (job.cost, job.row_id))
+    log.info("refunded %.2f of a downgrade to %s (job %s now costs %.2f)",
+             back, job.user_id, job.row_id, job.cost)
+    return back
+
+
 def charge_more(job: Job, per_item: float, items: int) -> int:
     """
     Charge for the extra items a job turned out to hold. Returns how many it covered.

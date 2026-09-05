@@ -117,6 +117,45 @@ def _stream_at(resolved: Resolved, height: int, label: str) -> Stream | None:
             return stream
     return None
 
+
+def re_pick(resolved: Resolved, label: str, height: int | None,
+            paid: float) -> Stream | None:
+    """
+    Find the rendition a job already paid for, in a *fresh* resolve.
+
+    The CDN's URLs are signed and time-limited. The sample the operator sent carried
+    `…,1788552000` in its token — a Unix timestamp, 4 September 2026 20:00 UTC — and
+    the link was already thirteen hours dead when he pasted it. So a URL resolved at
+    the door cannot be handed to ffmpeg an unknown number of minutes later; the job has
+    to look the video up again, and this is what turns that second answer back into the
+    thing the user bought.
+
+    Three attempts, in the order that keeps the promise the button made:
+
+    1. **The same label**, which is what the user actually tapped.
+    2. **The same height**, for a resolver that has relabelled the rung between the two
+       calls but is still offering the same picture.
+    3. **The best rung at or below the price already charged.** A re-resolve must never
+       cost more than the button said, so a vanished 1080p falls back to 720p and never
+       up to 1440p — and if even the cheapest rung on offer now costs more than was
+       paid, this answers None and the caller refunds rather than delivering something
+       nobody agreed to pay for.
+    """
+    exact = resolved.by_label(label)
+    if exact is not None:
+        return exact
+    if height:
+        same_height = _stream_at(resolved, height, label)
+        if same_height is not None:
+            return same_height
+    # `streams` is sorted tallest-then-fattest, so the first one within the price is
+    # the best copy the user is entitled to.
+    for stream in resolved.streams:
+        if price_of(stream.height) <= paid:
+            return stream
+    return None
+
+
 def menu(resolved: Resolved) -> list[tuple[Stream, float]]:
     """
     The buttons to show: one per priced rung the video actually has, cheapest first.

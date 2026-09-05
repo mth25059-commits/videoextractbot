@@ -47,7 +47,7 @@ from pyrogram.types import CallbackQuery, Message
 from .. import (credits, keyboards as kb, media, providers, queue as jobq,
                 scratch, state, ui, uploader)
 from ..config import cfg
-from ..providers.faphouse import faphouse, menu, rungs
+from ..providers.faphouse import faphouse, menu, price_of, re_pick, rungs
 from . import _gate
 
 log = logging.getLogger(__name__)
@@ -223,21 +223,64 @@ async def _animate_waiting(job: jobq.Job) -> None:
     except asyncio.CancelledError:
         pass
 
+async def _fresh_stream(job: jobq.Job, hint: providers.Stream) -> providers.Stream:
+    """
+    Look the video up again and return the rendition this job paid for.
+
+    **The URL in the payload is a hint, not the thing fetched.** These CDN URLs are
+    signed and time-limited — the token on the operator's own sample ends `,1788552000`, a
+    Unix timestamp — so the address resolved when the link was pasted has a shelf life
+    measured in hours, and there is no guarantee the job runs inside it: work ahead of
+    it in the queue, or a user who reads the menu and wanders off before choosing a
+    quality, is enough. Handed a lapsed URL, ffmpeg fails on a video the bot could
+    perfectly well have fetched, and the refund message reads like a bug on this side.
+
+    A second resolve that *fails* falls back to the hint rather than giving up. The
+    resolver being down for the thirty seconds a job waited is not a reason to refuse a
+    paid job whose parked URL may well still be inside its window — and if it is not,
+    ffmpeg raises and `Queue._run_one` refunds anyway. What is not allowed is delivering
+    a different rung than the one that was paid for, and `re_pick` is what holds that
+    line: never dearer than `job.cost`, or nothing at all.
+    """
+    label = job.quality or hint.label
+    try:
+        resolved = await faphouse.resolve(job.source)
+    except Exception:
+        # Including ResolveError. The user id, never the link — `bot.log` is not a list
+        # of what people watch.
+        log.warning("fap: re-resolve failed for user %s, using the parked url",
+                    job.user_id, exc_info=True)
+        return hint
+
+    stream = re_pick(resolved, label, hint.height, job.cost)
+    if stream is None:
+        # Every rung on offer now costs more than was charged. Refunding is the only
+        # honest answer: the cheap copy the user paid for is not there to deliver.
+        raise providers.ResolveError(
+            "That video no longer has the quality you picked, and the ones it does "
+            "have cost more than you were charged. Send the link again to see what "
+            "it has now.")
+    if stream.url != hint.url:
+        log.info("fap: job %s re-resolved %s (%s)", job.row_id, label, stream.label)
+    return stream
+
+
 async def _deliver(client: Client, job: jobq.Job) -> None:
     """
     The queue runner: assemble the chosen rendition, hand it to Telegram, delete it.
 
-    **No lookup of its own.** The stream was resolved at the door and travels in
-    `job.payload`, so by the time a worker reaches here the quality has already been
-    priced and charged. Resolving again could only produce a second answer that
-    disagrees with what the user paid for.
+    **The stream is looked up again here, immediately before ffmpeg opens it.** The one
+    parked at the door priced the job and is still what the user is owed, but its URL is
+    signed and expires — see `_fresh_stream`, which re-resolves and re-picks the same
+    rung under a hard rule that the second answer can never cost more than the first.
 
     Raising is how this reports failure: `Queue._run_one` catches it, refunds the
-    credit, marks the row and tells the user. So there is no money code here — only
-    the `finally` that takes the scratch directory back.
+    credit, marks the row and tells the user. The one piece of money code here is the
+    other side of that coin — a rung that vanished between the tap and the fetch is
+    delivered one rung down, and `jobq.refund_difference` gives back the gap.
     """
     status: Message = job.payload["status"]
-    stream: providers.Stream = job.payload["stream"]
+    hint: providers.Stream = job.payload["stream"]
     work = scratch.claim(_work_dir(job))
     head = f"<b>{ui.esc(_panel_title(job))}</b>"
 
@@ -247,6 +290,19 @@ async def _deliver(client: Client, job: jobq.Job) -> None:
                                    reply_markup=kb.cancel_only(job.token))
         except Exception:
             log.debug("fap: could not open the live panel", exc_info=True)
+
+        stream = await _fresh_stream(job, hint)
+        # Never up, sometimes down — `re_pick` holds the ceiling, this settles the price
+        # of what actually came back. Paying the 1080p rate for the 720p copy is the same
+        # bug as paying for a video that never arrived, only smaller.
+        jobq.refund_difference(job, price_of(stream.height))
+        # And the job now says what it is delivering rather than what was tapped, so the
+        # file name in the admin's own log is not a claim about a rung that never went out.
+        # The `quality` column keeps the tapped label; between the two, the row says what
+        # was asked for, what arrived, and what was finally charged for it.
+        job.quality = stream.label
+        if job.cancelled:
+            raise asyncio.CancelledError
 
         # A total is what makes the bar a bar rather than a rising number, and for an
         # HLS variant the only place its length is written down is the playlist

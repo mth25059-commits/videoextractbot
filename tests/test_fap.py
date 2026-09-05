@@ -711,6 +711,138 @@ def test_the_whole_route_from_key_to_video():
         queue._release(job)
         check("and once it does, the user may send another link", queue.busy(USER), 0)
 
+        # 5b. The URL is looked up again, at the last possible moment.
+        #
+        # Every one of these addresses is **signed and time-limited**. The token on
+        # the operator's own sample ended `,1788552000` — a Unix timestamp — and the link was
+        # already thirteen hours dead when he pasted it. It is resolved when the link
+        # arrives and the job may not run for minutes: work ahead of it in the queue, or a
+        # user who reads the menu and wanders off before picking a quality. So the runner
+        # resolves again immediately before ffmpeg opens the stream, and the URL in the
+        # payload is a hint. What the second answer may never do is cost more than the
+        # button said, which is why each case below watches the wallet as well as the URL.
+        fetched: list[str] = []
+
+        async def watching_fetch(url, out_path, **_kw):
+            fetched.append(url)
+            out_path.write_bytes(b"v" * 4096)
+
+        def variant(token, drop=()):
+            """`SAMPLE` again, freshly signed and with some rungs no longer on offer."""
+            payload = json.loads(json.dumps(SAMPLE))
+            entry = payload["data"]["file"]
+            entry["quality_streams"] = [
+                dict(e, stream_url=e["stream_url"].split("?")[0] + f"?t={token}")
+                for e in entry["quality_streams"] if e["quality"] not in drop
+            ]
+            return payload
+
+        def run_a_job(label, second_resolve):
+            """
+            The whole route once more — paste, tap `label`, run — with `second_resolve`
+            answering the *job's* lookup only.
+
+            Driven through the real handlers rather than a hand-built `Job`, because what
+            is under test is that the runner resolves again; a payload assembled here
+            could carry something the door would never have parked.
+            """
+            board = Msg("☰ <b>Menu</b>", BOT)
+            state.set_mode(USER, fap.MODE, panel=board.id, chat=USER)
+            link = Msg(TRACKED, USER)
+            asyncio.run(app.handlers["got_link"](client, link))
+            card = link.replies[-1] if link.replies else board
+            tap = next(d for d in card.buttons() if d.endswith(":" + label))
+            asyncio.run(app.handlers["pick_quality"](client, Press(tap, card)))
+            fresh = queue._q[jobq.LINK_LANE].get_nowait()
+            faphouse.resolve = second_resolve
+            try:
+                asyncio.run(queue._run_one(fresh))
+            finally:
+                faphouse.resolve = fake_resolve       # the door's own resolve, restored
+                queue._release(fresh)
+            return fresh
+
+        media.fetch_to_mp4 = watching_fetch
+        # (a) The same rung, at a new address. The ordinary case, and the one that was
+        #     broken: the parked URL went to ffmpeg however long the job had waited.
+        async def resolve_again(url):
+            asked.append(url)
+            return fapmod.parse(variant("fresh%3D%3D"), url)
+
+        wallet = credits.balance(USER)
+        again_job = run_a_job("720p", resolve_again)
+        check("ffmpeg is handed the URL from the second answer, not the parked one",
+              fetched[-1].endswith("720.mp4.m3u8?t=fresh%3D%3D"), True)
+        check("which really is a different address than the menu was built from",
+              fetched[-1] == again_job.payload["stream"].url, False)
+        check("the rung is still the one that was tapped", again_job.quality, "720p")
+        check("and the re-resolve changes nothing about the price",
+              credits.balance(USER), wallet - cfg.cost_fap_720)
+
+        # (b) The tapped rung has gone. It is delivered one rung *down* and the difference
+        #     comes back — a 1080p charge for a 720p copy is the same overcharge as paying
+        #     for a video that never arrived, only smaller.
+        async def resolve_without_1080(url):
+            asked.append(url)
+            return fapmod.parse(variant("down%3D%3D", drop=("1080p",)), url)
+
+        wallet = credits.balance(USER)
+        dropped = run_a_job("1080p", resolve_without_1080)
+        check("a rung that vanished after the tap falls back to the next one down",
+              fetched[-1].endswith("720.mp4.m3u8?t=down%3D%3D"), True)
+        check("never up: the second answer cannot cost more than the button said",
+              dropped.cost <= cfg.cost_fap_1080, True)
+        check("and the gap is given back, so nobody pays 1080p for 720p",
+              credits.balance(USER), wallet - cfg.cost_fap_720)
+        check("the job's own price is corrected with it", dropped.cost, cfg.cost_fap_720)
+        check("and the file is named for what was sent, not for what was tapped",
+              dropped.file_name.endswith("[720p]"), True)
+        down_row = conn.execute("SELECT status, charged, cost FROM jobs WHERE id = ?",
+                                (dropped.row_id,)).fetchone()
+        check("the row says done", down_row["status"], "done")
+        check("and still charged", down_row["charged"], 1)
+        check("at the price of what actually arrived", down_row["cost"], cfg.cost_fap_720)
+        # (c) Nothing left within the price. Refusing is the only honest answer: the cheap
+        #     copy that was paid for is not there, and handing over the dear one for less
+        #     is not this route's decision to make.
+        async def resolve_only_dear(url):
+            asked.append(url)
+            return fapmod.parse(
+                variant("dear%3D%3D", drop=("240p", "480p", "720p")), url)
+
+        wallet = credits.balance(USER)
+        nothing_fetched = len(fetched)
+        refused_job = run_a_job("480p", resolve_only_dear)
+        check("nothing is fetched when every rung on offer now costs more",
+              len(fetched), nothing_fetched)
+        check("and the credit comes back whole", credits.balance(USER), wallet)
+        check("the user is told about the video, not about an exception",
+              "quality you picked" in client.sent[-1], True)
+        check("with the refund in writing", "refunded" in client.sent[-1], True)
+        check("and no exception name in it", "ResolveError" in client.sent[-1], False)
+        dear_row = conn.execute("SELECT status, charged FROM jobs WHERE id = ?",
+                                (refused_job.row_id,)).fetchone()
+        check("the row says failed", dear_row["status"], "failed")
+        check("and not charged", dear_row["charged"], 0)
+
+        # (d) The resolver is down for the thirty seconds this job waited. The parked URL
+        #     may well still be inside its window, so it is used rather than throwing away
+        #     a job that is already paid for — and if it has lapsed, ffmpeg raises and the
+        #     queue refunds, which is the path (c) and step 6 already prove.
+        async def resolve_boom(url):
+            asked.append(url)
+            raise ResolveError("the resolver is having a moment")
+
+        wallet = credits.balance(USER)
+        survived = run_a_job("480p", resolve_boom)
+        check("a resolver outage falls back to the URL parked at the door",
+              fetched[-1].endswith("480.mp4.m3u8?t=b%3D%3D"), True)
+        check("the video still went out", survived.size_bytes, 4096)
+        check("and it stays charged, because it arrived",
+              credits.balance(USER), wallet - cfg.cost_fap_480)
+
+        media.fetch_to_mp4 = fake_fetch
+
         # 6. The same route again, but ffmpeg fails. Nobody pays for a video that did
         #    not arrive, and the refund is the queue's, not this route's.
         #
