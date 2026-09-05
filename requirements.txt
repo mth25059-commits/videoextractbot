@@ -18,3 +18,12 @@ psutil==6.0.0
 
 # Password-protected ZIPs (AES). The stdlib zipfile only handles legacy ZipCrypto.
 pyzipper==0.3.6
+
+# RAR. `rarfile` is a wrapper, not a decoder — it needs a binary, and the one to
+# install is `unar` (apt install unar), NOT `unrar`: unrar is non-free and is not
+# in Ubuntu's default repositories, while unar reads RAR5 too.
+rarfile==4.2
+
+# 7z, pure Python, so nothing outside pip has to be on the box.
+py7zr==0.22.0
+

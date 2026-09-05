@@ -21,7 +21,7 @@ from typing import Any, Literal
 TTL_SECONDS = 30 * 60
 
 Mode = Literal["terabox", "zip", "await_links", "await_amount", "await_zip_password",
-               "admin_give_user", "admin_give_amount"]
+               "await_fap_link", "admin_give_user", "admin_give_amount"]
 
 
 @dataclass

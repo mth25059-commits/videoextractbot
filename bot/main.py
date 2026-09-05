@@ -6,7 +6,8 @@ Entry point.
 Boots the Pyrogram client, registers handlers, and starts the worker pool. The
 payment callback listener and the job queue come up alongside it and are shut
 down cleanly on SIGTERM so systemd restarts never leave a half-uploaded temp
-file behind.
+file behind — and `scratch.sweep_at_boot` clears whatever a `kill -9` did leave,
+before the first job asks for space.
 """
 
 from __future__ import annotations
@@ -18,9 +19,9 @@ import sys
 
 from pyrogram import Client
 
-from . import db, media
+from . import db, media, nightly, scratch
 from .config import ConfigError, cfg
-from .handlers import admin, start as start_handlers, terabox, zipfiles
+from .handlers import admin, fap, start as start_handlers, terabox, zipfiles
 from .queue import Queue
 
 logging.basicConfig(
@@ -44,13 +45,21 @@ def build_client() -> Client:
 
 
 def register_all(app: Client, jobs: Queue) -> None:
+    """
+    **Order matters, and only in one place.** `terabox.register` ends with
+    `loose_text`, a catch-all text handler, and pyrogram runs the first handler in a
+    group that matches — so every flow that owns a text prompt has to be registered
+    before it or it will never see a message. `fap` and `zipfiles` both do; terabox
+    stays last.
+    """
     start_handlers.register(app)
     admin.register(app, jobs)
     zipfiles.register(app, jobs)
+    fap.register(app, jobs)
     terabox.register(app, jobs)
     # Registered on their own branches:
     #   payment.register(app)           -> feat/payments
-    #   soon.register(app)              -> feat/faphouse-button
+    #   soon.register(app)              -> feat/faphouse-button (superseded by `fap`)
 
 
 async def run() -> None:
@@ -62,6 +71,11 @@ async def run() -> None:
     db.connect()
     log.info("database ready at %s", cfg.db_path)
 
+    # Before any worker starts, and before the disk guard has to make anyone wait
+    # for space: nothing under work_dir can belong to a job now, because no job
+    # survives a restart. Anything there is what a kill or a crash left behind.
+    scratch.sweep_at_boot()
+
     app = build_client()
     jobs = Queue(app)
     register_all(app, jobs)
@@ -70,12 +84,14 @@ async def run() -> None:
     me = await app.get_me()
     log.info("started as @%s (id %s)", me.username, me.id)
     log.info("admins: %s", ", ".join(str(i) for i in cfg.admin_ids))
-    log.info("workers: %s concurrent · upload ceiling %s MB",
-             cfg.max_concurrent_jobs, cfg.max_upload_mb)
+    log.info("workers: %s link · %s zip · upload ceiling %s MB",
+             cfg.max_concurrent_jobs, cfg.max_concurrent_zip_jobs, cfg.max_upload_mb)
     if not cfg.payments_enabled:
         log.warning("PAYSVC_SECRET is empty — top-ups are disabled until it is set")
 
     await jobs.start()
+    janitor = asyncio.create_task(scratch.janitor(), name="scratch-janitor")
+    reporter = asyncio.create_task(nightly.run(app, jobs), name="nightly-report")
 
     stop = asyncio.Event()
 
@@ -92,6 +108,8 @@ async def run() -> None:
 
     await stop.wait()
     log.info("stopping…")
+    janitor.cancel()
+    reporter.cancel()
     await jobs.stop()      # refunds anything still in flight
     await app.stop()
     log.info("stopped cleanly")

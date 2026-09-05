@@ -73,20 +73,44 @@ git checkout main && git merge feat/terabox feat/payments
 ([bot/handlers/terabox.py](bot/handlers/terabox.py)).
 
 ```
-/s/1abc…  ──►  surl  ──►  /share/list  ──►  dlink  ──►  the file
+/s/1abc…  ──►  surl  ──►  <home>/main  ──►  /share/list  ──►  dlink  ──►  the file
+                          jsToken +          bare surl        signed,
+                          bdstoken           + tokens         minutes
 ```
 
 Three things it depends on, in the order they usually break:
 
-- **`TERABOX_COOKIE`** — your own `ndus` cookie. Terabox refuses to list most
-  share links anonymously, so with this empty the service says it is not set up
-  instead of charging anyone. It expires; `errno -6` in the log means replace it.
+- **`TERABOX_COOKIE`** — your own `ndus` cookie, from a browser that is signed in.
+  Listing a share works without one; the **download** does not — `dlink` comes
+  back present and empty to a guest — so with this empty the service says it is
+  not set up instead of charging anyone.
+- **The cookie is bound to one host, and the bot finds out which.** A Terabox
+  session is valid on exactly the domain that issued it and answers `errno -6
+  user not login` on all the others, even though the cookie is scoped
+  `.1024terabox.com` and a browser sends it everywhere. So the host is discovered
+  (`/api/check/login` until one replies `errno 0` with a non-zero `uk`), never
+  configured — `errno -6` in the log after that means the cookie really has
+  expired.
 - **A browser TLS fingerprint** — requests go through `curl_cffi` with
   `impersonate="chrome124"`. Terabox's WAF rejects Python's handshake before it
   reads a single header, and the failure looks exactly like a bad cookie.
+
+Two smaller traps, both of which cost a day:
+
 - **`dlink` is not the file** — it is a signed redirect, valid for minutes, tied
   to the cookie and User-Agent that asked for it. It is resolved per job, never
   cached.
+- **`dp-logid` must never be sent.** It is in the page bundle's own parameter
+  builder, so it looks mandatory; send it and every call is refused with
+  `code 460020 need verify`, cookie or no cookie.
+
+**And the `dlink` has to be fetched on its own session.** The session that just
+made the API calls carries `browserid`, `csrfToken` and `lang` in its jar, and the
+CDN answers a flat `403 text/plain` to `ndus` arriving beside them — the same link,
+same second, on a clean session gives 200. It is not the `Accept` header and not
+Range; both were ruled out by measurement. `_direct_url` therefore builds its own
+session rather than taking one, because a caller sharing a session cannot be told
+apart from one that is not until the bytes 403, and that reads as an expired cookie.
 
 **No quality menu.** The original upload is the highest quality there is, so a
 link resolves to one stream and the bot takes it. The `/api/streaming` HLS
@@ -101,10 +125,19 @@ fetches and uploads on its own, so a 40 MB clip is not stuck behind a 1.8 GB fil
 A share link pointing at a folder still costs one credit; `TERABOX_MAX_FILES_PER_LINK`
 (default 10) bounds what a single credit can pull.
 
-The request layer has not been run against the live API from this repo — there is
-no cookie here. `tests/test_terabox.py` covers link matching, the five share-URL
-shapes and the `share/list` parsing against recorded response shapes; the first
-real link is what shakes out the rest.
+Verified against the live API on 4 September 2026 with a signed-in cookie: three
+shares resolved and served **HTTP 206 `video/mp4`** — 3.0 MB, 38.8 MB and 42.7 MB,
+byte-for-byte the sizes Terabox reports, with `ftyp`/`moov` inside the first MiB
+(already faststart) and `Range` honoured, so [bot/download.py](bot/download.py)
+resume works. `tests/live_check.py` is that check, kept runnable by hand:
+
+```bash
+.venv/Scripts/python tests/live_check.py
+```
+
+`tests/test_terabox.py` covers the same ground without a network — link matching,
+the five share-URL shapes, both surl spellings, `share/list` parsing, home-host
+discovery and the page-token scrape, against recorded response shapes.
 
 ## Install
 
@@ -155,6 +188,7 @@ python tests/test_archive.py    # ZIP pricing and path safety
 python tests/test_queue.py      # the money path: charge, refund, cancel, restart
 python tests/test_gate.py       # text handlers do not eat each other's messages
 python tests/test_terabox.py    # link matching and share-list parsing
+python tests/live_check.py      # by hand only: a real link, real bytes (needs a cookie)
 ```
 
 `test_queue.py` stubs Pyrogram, so it runs without the dependency installed. It

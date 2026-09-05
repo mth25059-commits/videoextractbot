@@ -95,6 +95,74 @@ def _bool(name: str, default: bool = False) -> bool:
     return raw in ("1", "true", "yes", "on")
 
 
+def _tokens() -> tuple[str, ...]:
+    """iteraplay `login_token`s, plural or singular, de-duplicated in order.
+
+    TERABOX_FALLBACK_TOKEN came first and may still be set on a running box, so it
+    is read too rather than silently ignored — one account is a perfectly good
+    configuration, it is just no longer the only one.
+    """
+    found = list(_list("TERABOX_FALLBACK_TOKENS"))
+    single = os.environ.get("TERABOX_FALLBACK_TOKEN", "").strip()
+    if single:
+        found.append(single)
+    seen, out = set(), []
+    for token in found:
+        if token not in seen:
+            seen.add(token)
+            out.append(token)
+    return tuple(out)
+
+
+def _cookies() -> tuple[str, ...]:
+    """Every Terabox cookie, `TERABOX_COOKIE` first then `TERABOX_COOKIE_2..6`.
+
+    **Numbered keys, not one comma-separated list.** A cookie value is a header
+    fragment: it legitimately contains `=` and `;`, and a real `ndus` can contain a
+    comma, so `_list` would shred it into halves that are each a broken cookie.
+    Numbering also keeps the order explicit, which matters — element zero is the one
+    rotation reaches for first.
+
+    Spares buy **failover, not speed**: Terabox shapes per CDN host, not per
+    account (measured 4 September 2026), so a second cookie makes nothing faster.
+    What it does is keep the bot working when one account is rate-limited or
+    logged out.
+    """
+    found = [os.environ.get("TERABOX_COOKIE", "").strip()]
+    found += [os.environ.get(f"TERABOX_COOKIE_{n}", "").strip() for n in range(2, 7)]
+    seen, out = set(), []
+    for cookie in found:
+        if cookie and cookie not in seen:
+            seen.add(cookie)
+            out.append(cookie)
+    return tuple(out)
+
+
+def _rate() -> tuple[float, float]:
+    """
+    The exchange rate, as both of the numbers people ask for.
+
+    Returns `(credits_per_rupee, rupees_per_credit)` — the same fact twice, because
+    the bot needs each one in a different place and deriving it at the point of use
+    is how a display ends up reading **"1 credit = ₹0.6667"**. `credits_for()` in
+    `payments.py` divides by `rupees_per_credit`, so that number has to exist; a
+    human reads "₹1 = 1.5 credits", so that one has to exist too, exactly, rather
+    than as `1/0.6667`.
+
+    `CREDITS_PER_RUPEE` is the setting to reach for: it is the sentence the operator
+    actually says. `RUPEES_PER_CREDIT` came first and is still honoured for a box
+    that has it set, but if both are present the readable one wins — the fallback
+    exists so an old `.env` keeps working, not so two settings can disagree.
+    """
+    per_rupee = _num("CREDITS_PER_RUPEE", 0)
+    per_credit = _num("RUPEES_PER_CREDIT", 0)
+    if per_rupee > 0:
+        return per_rupee, 1 / per_rupee
+    if per_credit > 0:
+        return 1 / per_credit, per_credit
+    return 1.5, 1 / 1.5
+
+
 @dataclass(frozen=True)
 class Config:
     # telegram
@@ -107,14 +175,30 @@ class Config:
     # credits
     free_credits_on_join: float
     min_topup_rupees: int
+    #: Two views of one rate — see `_rate()`. Never set one without the other.
+    credits_per_rupee: float
     rupees_per_credit: float
+    #: The price of **one video**, not one link: a folder link that holds ten of them
+    #: is charged ten times this, settled once the folder has been read.
     cost_terabox_per_link: float
     cost_zip_upto_1gb: float
     cost_zip_upto_2gb: float
     max_links_per_batch: int
 
     # workers
+    #
+    # Two independent lanes, because the two services do not compete for the same
+    # resource. Terabox jobs are limited by Terabox's own per-CDN-host shaping
+    # (~1.5 MB/s a stream, measured 4 September 2026); ZIP jobs pull from Telegram,
+    # unpack locally and upload, and never touch Terabox at all. Sharing one pool
+    # made four zips block three link jobs for no reason.
+    #
+    # Raising these does not make any single download faster — nothing here is
+    # CPU-bound and the box has ~13x headroom on its own pipe. It is so that six
+    # people all *start* at once instead of watching a queue, which is the part
+    # that actually feels slow.
     max_concurrent_jobs: int
+    max_concurrent_zip_jobs: int
     max_upload_mb: int
     work_dir: Path
 
@@ -128,13 +212,61 @@ class Config:
     show_soon_button: bool = False
     soon_button_label: str = "🔥  Fap"
 
-    # terabox: the operator's own logged-in cookie. Anonymous listing is refused
-    # for most links, so with this empty the service says so instead of charging.
+    # terabox: the operator's own logged-in cookie. Anonymous listing works, but
+    # only a signed-in session is given a download link, so without either this or
+    # the fallback below the service says so instead of charging.
+    #
+    # `terabox_cookies` is the whole pool — this one first, then TERABOX_COOKIE_2..6.
+    # It exists for **failover, not speed**: the throttle is on the CDN host serving
+    # the bytes, not on the account asking, so a second cookie makes no download
+    # faster. It takes over when the first is rate-limited (`errno 400210`) or has
+    # been logged out, which one cookie cannot survive at all.
     terabox_cookie: str = ""
+    terabox_cookies: tuple[str, ...] = field(default=())
     terabox_max_files_per_link: int = 10
+
+    # The cookieless route, through the third-party resolver iteraplay.com. It
+    # returns the original file at full quality, which is why it is on by default —
+    # with it off and no cookie the bot cannot fetch anything at all. Two things to
+    # know before leaving it on: every link handled this way is disclosed to
+    # someone else's server, and a caller with no account of their own gets five
+    # videos per six hours.
+    #
+    # That ceiling is the reason for the plural. Each `login_token` in
+    # TERABOX_FALLBACK_TOKENS is an iteraplay account the operator registered
+    # themselves, and each entry in PROXIES is a separate egress IP; the limit is
+    # counted per account and per address, so N tokens and M proxies raise it
+    # together. Both lists may be empty, which is simply the guest allowance.
+    terabox_fallback: bool = True
+    terabox_fallback_tokens: tuple[str, ...] = field(default=())
+
+    # How many (token, proxy) pairs one link may be tried through before giving up.
+    # Without a bound, ten links against ten proxies is a hundred requests to
+    # someone else's API for a single batch.
+    terabox_fallback_attempts: int = 4
 
     # misc
     proxies: tuple[str, ...] = field(default=())
+
+    # When the nightly health report goes to the admins, as HH:MM in **UTC**. The
+    # box runs on UTC and the operator reads IST, so the conversion is done here
+    # once rather than in the head of whoever edits it later: IST is UTC+5:30, so
+    # midnight IST is 18:30 UTC. Set it to an empty string to send no report.
+    daily_report_utc: str = "18:30"
+
+    # fap: the operator's own resolver, which turns one video page into a list of
+    # HLS renditions. Fixed in the source because it is the operator's service and
+    # not a per-install setting — `FAP_API` exists so a moved endpoint is one line
+    # of `.env` rather than a redeploy. Emptying it turns the 🔥 key into a polite
+    # "not switched on" and charges nobody.
+    fap_api: str = "https://resolver.example/api/faphouse/mrx"
+
+    # The priced ladder, one entry per rung the menu offers. Only the rungs a video
+    # actually has are shown, so these are prices and not promises. Halves are the
+    # reason `credits` is REAL in the database rather than INTEGER.
+    cost_fap_480: float = 1.0
+    cost_fap_720: float = 1.5
+    cost_fap_1080: float = 2.0
 
     @property
     def db_path(self) -> Path:
@@ -153,6 +285,8 @@ def load() -> Config:
     if not work_dir.is_absolute():
         work_dir = ROOT / work_dir
 
+    per_rupee, per_credit = _rate()
+
     cfg = Config(
         api_id=int(_req("API_ID")),
         api_hash=_req("API_HASH"),
@@ -161,12 +295,14 @@ def load() -> Config:
         log_chat_id=(_ids("LOG_CHAT_ID") or (None,))[0],
         free_credits_on_join=_num("FREE_CREDITS_ON_JOIN", 2),
         min_topup_rupees=_int("MIN_TOPUP_RUPEES", 20),
-        rupees_per_credit=_num("RUPEES_PER_CREDIT", 1),
-        cost_terabox_per_link=_num("COST_TERABOX_PER_LINK", 1),
+        credits_per_rupee=per_rupee,
+        rupees_per_credit=per_credit,
+        cost_terabox_per_link=_num("COST_TERABOX_PER_LINK", 0.5),
         cost_zip_upto_1gb=_num("COST_ZIP_UPTO_1GB", 2),
         cost_zip_upto_2gb=_num("COST_ZIP_UPTO_2GB", 4),
         max_links_per_batch=_int("MAX_LINKS_PER_BATCH", 10),
-        max_concurrent_jobs=_int("MAX_CONCURRENT_JOBS", 3),
+        max_concurrent_jobs=_int("MAX_CONCURRENT_JOBS", 6),
+        max_concurrent_zip_jobs=_int("MAX_CONCURRENT_ZIP_JOBS", 4),
         max_upload_mb=_int("MAX_UPLOAD_MB", 2000),
         work_dir=work_dir,
         paysvc_url=os.environ.get("PAYSVC_URL", "http://127.0.0.1:4400").rstrip("/"),
@@ -176,8 +312,18 @@ def load() -> Config:
         show_soon_button=_bool("SHOW_SOON_BUTTON", False),
         soon_button_label=os.environ.get("SOON_BUTTON_LABEL", "🔥  Fap").strip() or "🔥  Fap",
         terabox_cookie=os.environ.get("TERABOX_COOKIE", "").strip(),
+        terabox_cookies=_cookies(),
         terabox_max_files_per_link=_int("TERABOX_MAX_FILES_PER_LINK", 10),
+        terabox_fallback=_bool("TERABOX_FALLBACK", True),
+        terabox_fallback_tokens=_tokens(),
+        terabox_fallback_attempts=_int("TERABOX_FALLBACK_ATTEMPTS", 4),
         proxies=_list("PROXIES"),
+        daily_report_utc=os.environ.get("DAILY_REPORT_UTC", "18:30").strip(),
+        fap_api=os.environ.get(
+            "FAP_API", "https://resolver.example/api/faphouse/mrx").strip(),
+        cost_fap_480=_num("COST_FAP_480", 1),
+        cost_fap_720=_num("COST_FAP_720", 1.5),
+        cost_fap_1080=_num("COST_FAP_1080", 2),
     )
 
     if not cfg.admin_ids:

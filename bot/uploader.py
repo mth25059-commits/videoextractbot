@@ -56,6 +56,7 @@ class Sent:
     message: Message
     size_bytes: int
     seconds: float
+    parts: int = 1
 
     @property
     def speed(self) -> float:
@@ -66,12 +67,42 @@ def limit_bytes() -> int:
     return cfg.max_upload_mb * 1024 * 1024
 
 
+def part_count(size_bytes: int) -> int:
+    """How many pieces `size_bytes` has to be cut into to get through Telegram."""
+    limit = limit_bytes()
+    return max(1, -(-size_bytes // limit))          # ceil
+
+
 def check_size(path: Path) -> int:
     """Raise TooLarge before wasting an upload attempt. Returns the size."""
     size = path.stat().st_size
     if size > limit_bytes():
         raise TooLarge(size, limit_bytes())
     return size
+
+
+def rejoin_note(name: str, parts: int) -> str:
+    """
+    How to put the pieces back. Sent once, with the first part.
+
+    Worth spelling out: a `.001` file on a phone opens in nothing at all, and without
+    this the user reasonably concludes the bot sent them garbage.
+    """
+    return (
+        f"✂️ <b>Too big for Telegram — sent in {parts} parts</b>\n\n"
+        f"📦 <code>{ui.esc(name)}</code>\n"
+        f"🚧 Telegram stops at {ui.human_bytes(limit_bytes())} per file, so this one "
+        f"is cut into {parts} pieces.\n\n"
+        "<b>To join them back into one video:</b>\n"
+        "• <b>Phone</b> — open ZArchiver, long-press the <code>.001</code> file, "
+        "choose <i>Join parts</i>.\n"
+        "• <b>Windows</b> — put all parts in one folder, then in that folder run\n"
+        f"<code>copy /b \"{ui.esc(name)}.*\" \"{ui.esc(name)}\"</code>\n"
+        "• <b>Mac / Linux</b> —\n"
+        f"<code>cat \"{ui.esc(name)}\".* &gt; \"{ui.esc(name)}\"</code>\n\n"
+        "<i>Download every part first — one missing piece and the video will not play.</i>"
+    )
+
 
 
 def _progress_reporter(status: Message | None, title: str, started: float, stage: str,
@@ -112,6 +143,13 @@ async def send_video(
 
     Probes for duration/resolution and cuts a thumbnail first — without those
     Telegram delivers a grey document instead of a video with a preview frame.
+
+    **`caption` is accepted and ignored.** the operator's rule, and it applies to every
+    route: *"only video"* — no title under the clip, on Terabox, ZIP or the link
+    route. The parameter stays so callers, tests and `send_in_parts` keep their
+    shape, and so the decision lives in one place instead of three call sites that
+    each have to remember it. `title` is still used, but only for the progress
+    panel's own text, which is deleted when the job ends.
     """
     size = check_size(path)
     started = time.monotonic()
@@ -135,7 +173,7 @@ async def send_video(
         message = await client.send_video(
             chat_id=chat_id,
             video=str(path),
-            caption=caption[:1024] if caption else None,
+            caption=None,
             duration=int(info.duration) or 0,
             width=info.width or 0,
             height=info.height or 0,
@@ -166,18 +204,111 @@ async def send_as_document(
     Reached when a ZIP holds something exotic. Sending it as a document is worse
     UX than an inline video, but it is honest: the user still gets their file, and
     re-encoding it on the box would cost 20 minutes of pinned CPU per video.
+
+    `caption` is accepted and ignored, as in `send_video` — a document already shows
+    its own file name, so a caption here would be the title twice.
     """
     size = check_size(path)
     started = time.monotonic()
     message = await client.send_document(
         chat_id=chat_id,
         document=str(path),
-        caption=caption[:1024] if caption else None,
+        caption=None,
         force_document=True,
         progress=_progress_reporter(status, title or path.name, started,
                                     "sending as file", cancelled),
     )
     return Sent(message=message, size_bytes=size, seconds=time.monotonic() - started)
+
+
+#: Copy buffer for cutting parts. Small enough that a cancel is noticed quickly.
+PART_CHUNK = 1 << 20
+
+
+def _write_part(src, target: Path, want: int) -> int:
+    """Copy at most `want` bytes from an open handle into `target`. Returns the count."""
+    written = 0
+    with target.open("wb") as out:
+        while written < want:
+            chunk = src.read(min(PART_CHUNK, want - written))
+            if not chunk:
+                break
+            out.write(chunk)
+            written += len(chunk)
+    return written
+
+
+async def send_in_parts(
+    client: Client,
+    chat_id: int,
+    path: Path,
+    *,
+    caption: str = "",
+    status: Message | None = None,
+    title: str = "",
+    cancelled: Callable[[], bool] | None = None,
+) -> Sent:
+    """
+    Cut a file Telegram will not accept whole and send the pieces.
+
+    A video that is over the ceiling is still the video the user paid for, so it
+    leaves as `name.001`, `name.002`, … instead of as a refusal.
+
+    Each piece is written, sent and deleted before the next one is cut, so a 6 GB
+    video needs one part's worth of spare disk rather than another 6 GB — which is
+    what keeps this safe to run on all ten workers at once. The cutting itself goes
+    through `asyncio.to_thread`: a synchronous 2 GB copy on the event loop would
+    stall every other job's progress edits and heartbeat.
+    """
+    size = path.stat().st_size
+    limit = limit_bytes()
+    total = part_count(size)
+    started = time.monotonic()
+    label = title or path.name
+
+    try:
+        await client.send_message(chat_id, rejoin_note(path.name, total))
+    except Exception:
+        log.debug("rejoin note failed", exc_info=True)   # never fatal, it is a caption
+
+    last: Message | None = None
+    index = 0
+    with path.open("rb") as src:
+        while True:
+            if cancelled and cancelled():
+                raise asyncio.CancelledError
+            index += 1
+            part = path.with_name(f"{path.name}.{index:03d}")
+            try:
+                written = await asyncio.to_thread(_write_part, src, part, limit)
+                if not written:
+                    index -= 1                            # exact multiple of the limit
+                    break
+                # No title here either, but the part number stays: a `.002` document
+                # with nothing on it is unidentifiable, and "which piece is this" is
+                # not a caption in the sense the operator ruled out — it is the only way to
+                # tell three files apart. The name is in `<code>` so it can be copied
+                # into the rejoin command.
+                last = await client.send_document(
+                    chat_id=chat_id,
+                    document=str(part),
+                    file_name=part.name,
+                    caption=(f"✂️ Part <b>{index}</b> of <b>{total}</b>\n"
+                             f"<code>{ui.esc(path.name)}</code>")[:1024],
+                    force_document=True,
+                    progress=_progress_reporter(
+                        status, f"{label} — part {index}/{total}", started,
+                        f"part {index} of {total}", cancelled),
+                )
+            finally:
+                part.unlink(missing_ok=True)
+            if written < limit:
+                break
+
+    if last is None:                                      # a zero-byte file
+        raise TooLarge(size, limit)
+    return Sent(message=last, size_bytes=size,
+                seconds=time.monotonic() - started, parts=index)
 
 
 async def send_best_effort(
@@ -189,14 +320,23 @@ async def send_best_effort(
     status: Message | None = None,
     title: str = "",
     cancelled: Callable[[], bool] | None = None,
+    allow_split: bool = True,
 ) -> Sent:
     """
-    Try as a video, fall back to a document.
+    Get the file to the user by whatever route works: video, document, or in parts.
 
     Some containers Telegram accepts as a file but rejects as a video. Retrying
     as a document is the difference between "your video is here" and a hard
     failure the user has to be refunded for.
+
+    Over the size ceiling the file is cut into parts rather than refused. The check
+    happens up front so an over-limit file does not burn a doomed upload attempt
+    first, and `allow_split=False` is left for callers that genuinely want the
+    refusal (a preview, say) rather than 4 GB of documents.
     """
+    if allow_split and path.stat().st_size > limit_bytes():
+        return await send_in_parts(client, chat_id, path, caption=caption,
+                                  status=status, title=title, cancelled=cancelled)
     try:
         return await send_video(client, chat_id, path, caption=caption,
                                 status=status, title=title, cancelled=cancelled)
@@ -206,3 +346,4 @@ async def send_best_effort(
         log.warning("send_video failed for %s (%s), retrying as document", path.name, exc)
         return await send_as_document(client, chat_id, path, caption=caption,
                                       status=status, title=title, cancelled=cancelled)
+

@@ -10,8 +10,49 @@ from __future__ import annotations
 
 from pyrogram.types import InlineKeyboardButton as Btn
 from pyrogram.types import InlineKeyboardMarkup as Markup
+from pyrogram.types import KeyboardButton as Key
+from pyrogram.types import ReplyKeyboardMarkup as Keys
 
 from .config import cfg
+
+#: The persistent keyboard's labels. They arrive as ordinary text messages, so the
+#: catch-all handler matches on these exact strings — which is why they live here
+#: as constants and not inline in two files that could drift apart.
+KEY_TERABOX = "📦 Terabox"
+KEY_FAP = "🔥 Fap"
+KEY_FILE = "🗂 File"
+KEY_MENU = "☰ Menu"
+
+#: The four keys, plus a way back to the inline menu for everything else. Credit and
+#: Account deliberately do *not* have keys: those screens are owned by other handler
+#: modules — one of them on another branch entirely — and a key that has to reach
+#: across that seam would be a key that works on the box and not in the branch.
+#:
+#: Every label in here must have an answer in `handlers/terabox._home_key`. A key
+#: that matches nothing is worse than no key: the message goes to the catch-all and
+#: the user is told their own button is a "wrong link".
+HOME_LABELS = frozenset({KEY_TERABOX, KEY_FAP, KEY_FILE, KEY_MENU})
+
+
+def home_keys() -> Keys:
+    """
+    The always-there keyboard in the typing area.
+
+    Inline buttons live on one message, so once that message has scrolled away the
+    only way back is `/start` — which is exactly what a user pasting their fifth
+    link of the evening had to do. This one sits under the text box permanently,
+    and `is_persistent` keeps it open rather than collapsing to an icon.
+
+    Three keys on the top row and Menu full-width under them: the two services and
+    the one that is coming are what people reach for, and Menu is the escape hatch,
+    so it gets its own row rather than competing for a third of one.
+
+    `placeholder` does real work here: the most common action is not any button at
+    all, it is pasting a link, and the box now says so.
+    """
+    return Keys([[Key(KEY_TERABOX), Key(KEY_FAP), Key(KEY_FILE)], [Key(KEY_MENU)]],
+                resize_keyboard=True, is_persistent=True,
+                placeholder="Paste a Terabox link…")
 
 
 def main_menu(is_admin: bool = False) -> Markup:
@@ -19,15 +60,32 @@ def main_menu(is_admin: bool = False) -> Markup:
         [Btn("💳  Add Credit", callback_data="pay:open")],
         [
             Btn("📦  Terabox", callback_data="mode:terabox"),
-            Btn("🗂  ZIP File", callback_data="mode:zip"),
+            Btn("🗂  File", callback_data="mode:zip"),
         ],
     ]
     if cfg.show_soon_button:
         rows.append([Btn(cfg.soon_button_label, callback_data="mode:soon")])
-    rows.append([Btn("👤  My Account", callback_data="acct:open")])
+    rows.append([
+        Btn("📖  How it works", callback_data="help:open"),
+        Btn("👤  My Account", callback_data="acct:open"),
+    ])
     if is_admin:
         rows.append([Btn("🛠  Admin Panel", callback_data="adm:open")])
     return Markup(rows)
+
+
+def guide_nav(is_new: bool = False) -> Markup:
+    """
+    Under the manual. One button, and which one depends on why it is being read.
+
+    A first-time reader has not seen the menu yet, so the button is the way in; a
+    returning one came from the menu and wants to go back to it. Same screen, and
+    the difference is one word, but "Back" on the very first message a user ever
+    sees points at nothing they remember.
+    """
+    return Markup([[Btn("▶️  Start using it" if is_new else "◀  Back to Menu",
+                        callback_data="nav:menu")]])
+
 
 
 def back_to_menu(label: str = "◀  Back to Menu") -> Markup:
@@ -49,12 +107,22 @@ def account(has_history: bool = False) -> Markup:
 # --- topup ------------------------------------------------------------------
 
 def topup_presets() -> Markup:
-    """Quick amounts, plus a free-text option. Anything below the floor is rejected."""
+    """
+    Quick amounts, plus a free-text option. Anything below the floor is rejected.
+
+    Each button says what the money *buys*, not just what it costs — `₹20 → 30 cr`.
+    The rate is on the screen above it as a sentence, but this is the moment someone
+    is deciding how much to send, and a rate they have to do arithmetic on is a rate
+    they will get wrong. It is computed from `cfg.credits_per_rupee`, so changing the
+    rate changes the buttons and there is no second number to keep in step.
+    """
     floor = cfg.min_topup_rupees
     presets = [floor, floor * 5, floor * 10, floor * 25]
     rows, current = [], []
     for rupees in presets:
-        current.append(Btn(f"₹{rupees:g}", callback_data=f"pay:amt:{rupees:g}"))
+        gives = rupees * cfg.credits_per_rupee
+        current.append(Btn(f"₹{rupees:g}  →  {gives:g} cr",
+                           callback_data=f"pay:amt:{rupees:g}"))
         if len(current) == 2:
             rows.append(current)
             current = []
@@ -123,9 +191,55 @@ def admin_menu() -> Markup:
          Btn("🎁  Give Credit", callback_data="adm:give")],
         [Btn("📊  Bot Stats", callback_data="adm:bot"),
          Btn("🖥  VPS Status", callback_data="adm:vps")],
+        [Btn("🔗  Shared Links", callback_data="adm:links:0"),
+         Btn("📨  Send Report", callback_data="adm:report")],
+        [Btn("🔑  Terabox Health", callback_data="adm:tbox")],
         [Btn("💰  Payments", callback_data="adm:orders")],
+        [Btn("📢  Announce to everyone", callback_data="adm:say")],
         [Btn("◀  Back", callback_data="nav:menu")],
     ])
+
+
+def admin_announce(token: str) -> Markup:
+    """
+    The confirm under a drafted announcement.
+
+    A broadcast is the one admin action that cannot be taken back — it is thousands
+    of notifications on other people's phones — so it gets a preview and a second
+    tap, and the count is on the button so nobody sends to 4,000 people thinking it
+    was 40.
+    """
+    return Markup([
+        [Btn("📢  Send it", callback_data=f"adm:say:go:{token}")],
+        [Btn("✖  Cancel", callback_data="adm:open")],
+    ])
+
+
+def admin_links_page(page: int, has_prev: bool, has_next: bool) -> Markup:
+    """
+    Under the link log. The export is one tap and always exports the *whole* log,
+    not the page on screen — a paginated PDF would be a worse copy of the screen,
+    and the reason to ask for a file at all is to have the lot in one place.
+    """
+    nav = []
+    if has_prev:
+        nav.append(Btn("◀", callback_data=f"adm:links:{page - 1}"))
+    nav.append(Btn("🛠  Admin", callback_data="adm:open"))
+    if has_next:
+        nav.append(Btn("▶", callback_data=f"adm:links:{page + 1}"))
+    return Markup([[Btn("📄  Export all as PDF", callback_data="adm:links:pdf")], nav])
+
+
+def admin_health(has_benched: bool = False) -> Markup:
+    """Under the Terabox health card. Re-probing is a network call, so it is a
+    button rather than something the card does on every open."""
+    rows = [[Btn("🔄  Check again", callback_data="adm:tbox"),
+             Btn("🌐  Test proxies", callback_data="adm:tbox:proxies")]]
+    if has_benched:
+        rows.append([Btn("♻️  Put benched proxies back",
+                         callback_data="adm:tbox:unbench")])
+    rows.append([Btn("◀  Admin", callback_data="adm:open")])
+    return Markup(rows)
 
 
 def admin_user_row(user_id: int) -> Markup:

@@ -19,13 +19,43 @@ what order `register_all` uses.
 
 Only one mode is ever set per user (`state.set_mode` overwrites), so at most one
 of these handlers can match a given message.
+
+It also holds `forget()`, for the same reason: every route needs to take the user's
+own message back out of the chat, and four copies of the same five lines is where the
+fifth one gets forgotten.
 """
 
 from __future__ import annotations
 
+import logging
+
 from pyrogram import filters
 
 from .. import state
+
+log = logging.getLogger(__name__)
+
+
+async def forget(message, why: str = "") -> bool:
+    """
+    Take one message back out of the chat. True if it went.
+
+    the operator's rule — *"user bhje to cht se delete ho"* — and it is applied to every
+    input the bot accepts: the pasted link, the pressed key, the uploaded archive.
+    What is left on screen is the one panel the flow owns and then the video, which
+    is the whole point of the single-panel design.
+
+    **Never raises.** A delete can fail for reasons that are none of the flow's
+    business — the message is older than 48 hours, the user deleted it first, the
+    chat lost permissions — and none of them is a reason to fail a job the user has
+    already been charged for.
+    """
+    try:
+        await message.delete()
+        return True
+    except Exception:
+        log.debug("could not delete %s", why or "a message", exc_info=True)
+        return False
 
 
 def owns(user_id: int | None, modes: frozenset[str] | set[str]) -> bool:

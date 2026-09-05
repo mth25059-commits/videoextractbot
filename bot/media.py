@@ -32,8 +32,14 @@ CancelCheck = Callable[[], bool]
 FFMPEG = shutil.which("ffmpeg") or "ffmpeg"
 FFPROBE = shutil.which("ffprobe") or "ffprobe"
 
+#: What counts as a video inside an archive. Anything missing from here is filed as
+#: "other files (skipped)" and never sent, so the list being short is the same bug as
+#: refusing the file outright — ffmpeg reads all of these, and `remux_to_mp4` turns
+#: whatever Telegram will not play inline into an MP4 with `-c copy`.
 VIDEO_SUFFIXES = {
     ".mp4", ".mkv", ".webm", ".mov", ".avi", ".m4v", ".ts", ".flv", ".wmv", ".mpg", ".mpeg", ".3gp",
+    ".m2ts", ".mts", ".vob", ".ogv", ".rm", ".rmvb", ".asf", ".divx", ".mpe", ".m1v", ".m2v",
+    ".mp4v", ".f4v", ".3g2", ".mxf", ".dav",
 }
 
 # First bytes of the common containers, for when an extension lies.
