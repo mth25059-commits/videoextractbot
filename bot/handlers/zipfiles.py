@@ -206,10 +206,15 @@ async def _accept_archive(client: Client, message: Message, jobs: jobq.Queue,
     size = doc.file_size or 0
     cost = archive.price_for(size)
 
-    if jobs.busy(user_id):
+    # The archive lane only. A link of theirs downloading right now is a different
+    # pipe — Terabox's CDN, not Telegram's — so it does not stand in the way of this,
+    # and the refusal below says which one is actually busy.
+    if jobs.busy(user_id, jobq.ZIP_LANE):
         await message.reply_text(
-            "⏳ <b>One at a time, please</b>\n\nYour last job is still running. "
-            "I will be free the moment it finishes.",
+            "⏳ <b>One archive at a time, please</b>\n\nYour last ZIP is still "
+            "unpacking. I will be free the moment it finishes.\n\n"
+            "🔗 <b>Links are not blocked by this.</b> Paste a Terabox link right now "
+            "and it will run alongside this archive.",
             reply_markup=kb.back_to_menu())
         return False
 

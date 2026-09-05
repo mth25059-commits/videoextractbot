@@ -384,7 +384,8 @@ def guide(is_new: bool = False) -> str:
         "…plus the upload back to you on top. Several links at once is fine: they run "
         "side by side, not one after another.",
         "<i>One batch at a time per person, though — let it finish, or cancel it, "
-        "before starting the next.</i>",
+        "before starting the next. A ZIP is separate: an archive and a link can run "
+        "together.</i>",
         "",
         "<b>🔒 Your file is not kept</b>",
         "It is deleted from the server the moment the last video has been sent. Nothing "

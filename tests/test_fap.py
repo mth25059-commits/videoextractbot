@@ -707,6 +707,14 @@ def test_the_whole_route_from_key_to_video():
         # than quietly done, because a leaked slot would lock the user out for good.
         check("the worker loop, not _run_one, is what frees the slot",
               queue.busy(USER), 1)
+        # And the slot it holds is the *link* one, which is what the door checks. A
+        # Fap job charged against the archive lane would let a user run two links and
+        # refuse them the ZIP they can actually have — both halves of the rule wrong
+        # from one mistake, so both are asserted.
+        check("and it is the link lane it is holding",
+              queue.busy(USER, jobq.LINK_LANE), 1)
+        check("leaving the archive lane free the whole time",
+              queue.busy(USER, jobq.ZIP_LANE), 0)
         queue._release(job)
         check("and once it does, the user may send another link", queue.busy(USER), 0)
 

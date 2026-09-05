@@ -140,9 +140,11 @@ def _busy(count: int) -> str:
     """
     One wording for both services, imported where it is used.
 
-    A user with a Terabox batch running should be told the same thing here as there —
-    the limit is one job per person, not one per service — and the sentence that says
-    so already exists next door.
+    A user with a Terabox batch running should be told the same thing here as there,
+    because it is the same limit stopping them: Fap and Terabox share the link lane
+    (`queue.lane_of` sends everything that is not an archive down it), so one link
+    of either kind is one link. An archive is a different lane and does not count —
+    the sentence saying both of those things already exists next door.
     """
     from .terabox import _busy_note
 
@@ -430,7 +432,7 @@ async def _offer(client: Client, message: Message, user_id: int, jobs: jobq.Queu
         await say(blocked, kb.back_to_menu("◀  Menu"))
         return
 
-    running = jobs.busy(user_id)
+    running = jobs.busy(user_id, jobq.LINK_LANE)
     if running:
         await say(_busy(running), kb.back_to_menu("◀  Menu"))
         return
@@ -591,9 +593,9 @@ def register(app: Client, jobs: jobq.Queue) -> None:
                             show_alert=True)
             return
 
-        running = jobs.busy(cq.from_user.id)
+        running = jobs.busy(cq.from_user.id, jobq.LINK_LANE)
         if running:
-            await cq.answer("You already have work running.", show_alert=True)
+            await cq.answer("You already have a link running.", show_alert=True)
             await cq.message.edit_text(_busy(running),
                                        reply_markup=kb.back_to_menu("◀  Menu"))
             return

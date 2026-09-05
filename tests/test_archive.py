@@ -632,7 +632,12 @@ print("\nthe uploaded archive and the typed password are taken out of the chat")
 import sqlite3                                            # noqa: E402
 
 from bot import credits, db, state                        # noqa: E402
-from bot.queue import Queue                               # noqa: E402
+from bot.queue import LINK_LANE, ZIP_LANE, Job, Queue      # noqa: E402
+
+
+async def _never_runs_here(_job):                          # pragma: no cover
+    raise AssertionError("this job is only ever held, never run")
+
 
 _chat_root = Path(tempfile.mkdtemp(prefix="terabot-chat-"))
 (_chat_root / "work").mkdir(parents=True, exist_ok=True)
@@ -739,9 +744,26 @@ check("the reply that stays behind is the panel, not the file",
 _second = _ChatMsg(document=_Doc("Another.zip", _plain.stat().st_size))
 asyncio.run(_app.handlers["got_document"](_zclient, _second))
 check("a second archive while one is running is turned away",
-      "One at a time" in _second.replies[-1].text, True)
+      "One archive at a time" in _second.replies[-1].text, True)
+check("and it says a link is still free, so nobody waits for no reason",
+      "Links are not blocked" in _second.replies[-1].text, True)
 check("and that one stays put — it is the only copy they can send again",
       _second.deleted, False)
+
+# The lane rule from the archive side. The user above has a ZIP in flight and is
+# refused a second one; a *link* of theirs in flight must not refuse them an archive,
+# because it is Terabox's CDN on one end and Telegram's on the other.
+_link_job = Job(user_id=_USER + 1, chat_id=_USER + 1, kind="terabox",
+                source="https://terabox.com/s/1x", cost=1.0,
+                runner=_never_runs_here)
+_queue._hold(_link_job)
+check("a link in flight is not counted against the archive lane",
+      _queue.busy(_USER + 1, ZIP_LANE), 0)
+check("though it is counted against its own",
+      _queue.busy(_USER + 1, LINK_LANE), 1)
+check("and the total still sees both", _queue.busy(_USER + 1), 1)
+_queue._release(_link_job)
+check("releasing a link leaves no row behind", _queue.busy(_USER + 1), 0)
 
 _wrong_kind = _ChatMsg(document=_Doc("notes.txt", 12))
 _wrong_kind.document.mime_type = "text/plain"

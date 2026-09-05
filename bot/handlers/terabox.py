@@ -465,10 +465,21 @@ WRONG_LINK = (
 
 
 def _busy_note(count: int) -> str:
+    """
+    The refusal both link routes show, Terabox and Fap alike.
+
+    It only ever means the **link** lane is full: the doors ask
+    `jobs.busy(user_id, jobq.LINK_LANE)`, so an archive of the same user's running
+    beside this is not what stopped them. That is worth spelling out, or somebody
+    who has just started a ZIP reads this as the bot refusing everything until it
+    is done and waits instead of pasting.
+    """
     return (
         f"⏳ <b>You already have {count} link(s) running</b>\n\n"
-        "One job at a time per person — that way yours gets the full speed instead "
+        "One link at a time per person — that way yours gets the full speed instead "
         "of racing itself. Send this again the moment the last video lands.\n\n"
+        "📦 <b>A ZIP is not blocked by this.</b> You can send an archive right now and "
+        "it will unpack alongside — different lane, full speed each.\n\n"
         "<i>Nothing was charged for this message.</i>"
     )
 
@@ -512,7 +523,7 @@ async def _offer_batch(client: Client, message: Message, user_id: int,
         await say(blocked, kb.back_to_menu("◀  Menu"))
         return
 
-    running = jobs.busy(user_id)
+    running = jobs.busy(user_id, jobq.LINK_LANE)
     if running:
         await say(_busy_note(running), kb.back_to_menu("◀  Menu"))
         return
@@ -710,9 +721,9 @@ def register(app: Client, jobs: jobq.Queue) -> None:
             return
         # Checked again here, not only at the door: two batches can be pasted before
         # either is confirmed, and it is the confirm that spends the credit.
-        running = jobs.busy(cq.from_user.id)
+        running = jobs.busy(cq.from_user.id, jobq.LINK_LANE)
         if running:
-            await cq.answer("You already have work running.", show_alert=True)
+            await cq.answer("You already have a link running.", show_alert=True)
             await cq.message.edit_text(_busy_note(running))
             return
         await cq.answer("Starting…")

@@ -38,7 +38,7 @@ sys.modules.update({"pyrogram": _pyrogram, "pyrogram.errors": _errors,
 from bot import credits, db, state          # noqa: E402
 from bot.config import cfg                  # noqa: E402
 from bot.queue import (LINK_LANE, ZIP_LANE, Job, NoSpace,  # noqa: E402
-                       Queue, Rejected)
+                       Queue, Rejected, lane_of)
 
 passed = failed = 0
 
@@ -331,17 +331,19 @@ async def main():
     check("and stays charged", credits.balance(USER), before - 1.0)
     await patient.stop()
 
-    # --- one process per person ---------------------------------------------
+    # --- one process per person, per lane ------------------------------------
     #
     # The door asks `busy()` before it charges anything, so this count has to be
     # exact in both directions: too low and a second batch slips through, too high
     # and the user is locked out of the bot for ever with nothing running.
-    print("\none process per person")
+    print("\none process per person, per lane")
     credits.grant(USER, 3.0, "test top-up")
 
     counted = Queue(client, workers=1)
     await counted.start()
     check("nobody is busy on a fresh queue", counted.busy(USER), 0)
+    check("and no lane of theirs is either",
+          (counted.busy(USER, LINK_LANE), counted.busy(USER, ZIP_LANE)), (0, 0))
 
     gate = asyncio.Event()
 
@@ -351,6 +353,9 @@ async def main():
     held_jobs = [counted.submit(Job(user_id=USER, chat_id=CHAT, kind="terabox",
                                     runner=held, cost=1.0)) for _ in range(2)]
     check("both count as in flight, queued or running", counted.busy(USER), 2)
+    check("and they are counted in the lane they will run in",
+          counted.busy(USER, LINK_LANE), 2)
+    check("not in the other one", counted.busy(USER, ZIP_LANE), 0)
     check("and a different person is still free", counted.busy(USER + 1), 0)
 
     gate.set()
@@ -393,6 +398,65 @@ async def main():
     check("two in flight before the restart", restarted.busy(USER), 2)
     await restarted.stop()
     check("a restart leaves nobody busy", restarted.busy(USER), 0)
+    check("and clears the lanes with it",
+          (restarted.busy(USER, LINK_LANE), restarted.busy(USER, ZIP_LANE)), (0, 0))
+
+    # The rule the operator asked for, in the one place it is decided: a ZIP takes so
+    # long that being locked out of links for its whole duration is most of the wait a
+    # user ever sees. An archive is pulled from Telegram, unpacked here and uploaded,
+    # while a link is pulled from the provider's CDN — different pipes, so both run at
+    # full speed and there is nothing to protect the user from.
+    print("\nan archive and a link, at once, for one person")
+    credits.grant(USER, 4.0, "test top-up")
+    both = Queue(client, workers=1)
+    await both.start()
+
+    pair = asyncio.Event()
+    entered: list[str] = []
+
+    async def holds(job):
+        entered.append(job.kind)
+        await pair.wait()
+
+    zip_side = both.submit(Job(user_id=USER, chat_id=CHAT, kind="zip",
+                               runner=holds, cost=1.0))
+    check("the archive is in the archive lane", both.busy(USER, ZIP_LANE), 1)
+    check("and the link lane is still open to them",
+          both.busy(USER, LINK_LANE), 0)
+
+    link_side = both.submit(Job(user_id=USER, chat_id=CHAT, kind="terabox",
+                                runner=holds, cost=1.0))
+    check("so a link goes in beside it rather than being refused",
+          both.busy(USER, LINK_LANE), 1)
+    check("two jobs, one person", both.busy(USER), 2)
+    check("a second link is still refused, which is the part that stays",
+          both.busy(USER, LINK_LANE), 1)
+
+    # Both counted *and* both actually started. The counts above would read the same
+    # if the second job were sitting in a queue behind the first, and sitting in a
+    # queue is the thing this change exists to stop — so the runners say so
+    # themselves, from inside a lane worker each, while the other is still held.
+    await asyncio.sleep(0.1)
+    check("and both are running, not one behind the other",
+          sorted(entered), ["terabox", "zip"])
+    check("with nothing left waiting in either queue", both.depth(), 0)
+
+    pair.set()
+    await asyncio.sleep(0.3)
+    check("both finished", {job_row(j.row_id)["status"]
+                            for j in (zip_side, link_side)}, {"done"})
+    check("and each lane released its own",
+          (both.busy(USER, ZIP_LANE), both.busy(USER, LINK_LANE)), (0, 0))
+    check("with no key left behind for them at all", both._inflight, {})
+    await both.stop()
+
+    # `lane_of` maps everything that is not an archive onto the link lane, so a Fap
+    # job and a Terabox job are one lane and remain mutually exclusive for one user.
+    # That is deliberate: they both come down the same provider pipe, and splitting
+    # them would be a third lane with its own worker count and disk headroom.
+    check("Fap shares the link lane, not a third one", lane_of("fap"), LINK_LANE)
+    check("and an archive is the only thing that is not a link", lane_of("zip"),
+          ZIP_LANE)
 
     # --- pro-rata: an archive is one price for many videos -------------------
     #

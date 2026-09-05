@@ -12,6 +12,10 @@ uploads, never touching Terabox. Sharing a single pool meant four archives could
 block three link jobs for no reason at all, so `Job.kind` picks the lane and the
 two drain side by side.
 
+The same split decides how much one person may have going at once: one job **per
+lane**, so an archive and a link run together but two links do not — see
+`Queue.busy` for why that line is drawn there and not around the user.
+
 Raising a lane's width does not make any one download faster — Terabox's shaping
 decides that. It is so that six people all *start* immediately instead of watching
 a queue, which is the part that feels slow. Contention here is graceful rather
@@ -315,36 +319,51 @@ class Queue:
         }
         self._tasks: list[asyncio.Task] = []
         self._active: dict[tuple[str, int], Job] = {}
-        #: user id -> how many of their jobs are queued or running. Kept as a count
-        #: rather than read off the lane queues because an `asyncio.Queue` cannot be
-        #: inspected without draining it, and this is asked on every message.
-        self._inflight: dict[int, int] = {}
+        #: (user id, lane) -> how many of their jobs are queued or running in it.
+        #: Kept as a count rather than read off the lane queues because an
+        #: `asyncio.Queue` cannot be inspected without draining it, and this is asked
+        #: on every message. Keyed by lane as well as user because the one-at-a-time
+        #: rule is per lane — see `busy`.
+        self._inflight: dict[tuple[int, str], int] = {}
         self._closing = False
         self.done_count = 0
         self.failed_count = 0
 
-    def busy(self, user_id: int) -> int:
+    def busy(self, user_id: int, lane: str | None = None) -> int:
         """
-        How much work this user already has in flight.
+        How much work this user already has in flight — in one lane, or altogether.
 
-        One person, one process at a time: a second batch while the first is still
-        running would have them watching two progress bars race for the same
-        throttled pipe, and neither would finish sooner. A whole batch counts as
-        the work it is — ten links submitted together are ten, and the door checks
-        this once before submitting any of them.
+        **One person, one job per lane.** Two jobs in the *same* lane would have them
+        watching two progress bars race for the same throttled pipe and neither would
+        finish sooner, which is why the doors refuse a second link while the first is
+        running. Across lanes that reasoning does not hold: an archive is pulled from
+        Telegram, unpacked here and uploaded, while a link job is pulled from the
+        provider's own CDN. They are different pipes, so a user may have one archive
+        and one link going at once and both run at full speed.
+
+        A whole batch counts as the work it is — ten links submitted together are ten,
+        and the door checks this once before submitting any of them.
+
+        `lane=None` is the total across every lane, which is what an admin card wants
+        and what the doors must *not* use.
         """
-        return self._inflight.get(user_id, 0)
+        if lane is None:
+            return sum(count for (uid, _), count in self._inflight.items()
+                       if uid == user_id)
+        return self._inflight.get((user_id, lane), 0)
 
     def _hold(self, job: Job) -> None:
-        self._inflight[job.user_id] = self._inflight.get(job.user_id, 0) + 1
+        key = (job.user_id, lane_of(job.kind))
+        self._inflight[key] = self._inflight.get(key, 0) + 1
 
     def _release(self, job: Job) -> None:
         """Called exactly once per accepted job, whatever ended it."""
-        left = self._inflight.get(job.user_id, 0) - 1
+        key = (job.user_id, lane_of(job.kind))
+        left = self._inflight.get(key, 0) - 1
         if left > 0:
-            self._inflight[job.user_id] = left
+            self._inflight[key] = left
         else:
-            self._inflight.pop(job.user_id, None)
+            self._inflight.pop(key, None)
 
     @property
     def workers(self) -> int:
