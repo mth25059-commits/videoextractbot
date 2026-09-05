@@ -473,7 +473,10 @@ def part_d_live():
         check("a refund larger than the spend floors it at zero rather than failing",
               float(db.scalar("SELECT total_spent FROM users WHERE user_id = ?", (uid,))), 0.0)
         check("and the credits are back", credits.balance(uid), 13.5)
-        check("every movement left a ledger row", len(credits.history(uid, 10)), 4)
+        # Three: the top-up, the charge and the refund. There is no fourth because the
+        # joining bonus is off above — with it on this is 4, and that difference is
+        # exactly what made the balances above read 12 instead of 10.
+        check("every movement left a ledger row", len(credits.history(uid, 10)), 3)
 
         # The statement that used to read `cur.lastrowid`. `runner` is never called —
         # `_insert_row` only writes the row — but `Job` requires it, so it is a lambda
