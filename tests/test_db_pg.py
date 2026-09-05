@@ -413,6 +413,10 @@ def part_c_the_postgres_path():
           [t for t in db.TABLES if f"CREATE TABLE IF NOT EXISTS {t} " not in text], [])
 
 
+async def _never_runs(_job):                                 # pragma: no cover
+    raise AssertionError("part D writes a job row, it does not run the job")
+
+
 def part_d_live():
     """
     The same route against a real Postgres. Skipped unless `DATABASE_URL` is set.
@@ -429,11 +433,18 @@ def part_d_live():
         print("     Set it and run this again on the box to check the live round trip.")
         return
 
-    print(f"\n— D. against a real Postgres — {db.describe()} —")
-    from bot import credits, queue                    # noqa: PLC0415
+    print("\n— D. against a real Postgres —")
+    from bot import credits, expiry, queue             # noqa: PLC0415
 
     db._conn = None
     object.__setattr__(cfg, "database_url", url)
+    print(f"     {db.describe()}")
+    # `ensure` pays a joining bonus out of `cfg`, and this file's sums are written as
+    # literals — 10 in, 1.5 out, 8.5 left — because that is what makes the
+    # half-credit assertion below say something about the column's precision rather
+    # than about the welcome gift. So the gift is turned off for the round trip.
+    joining_bonus = cfg.free_credits_on_join
+    object.__setattr__(cfg, "free_credits_on_join", 0)
     uid = -999001
     try:
         conn = db.connect()
@@ -464,9 +475,12 @@ def part_d_live():
         check("and the credits are back", credits.balance(uid), 13.5)
         check("every movement left a ledger row", len(credits.history(uid, 10)), 4)
 
-        # The statement that used to read `cur.lastrowid`.
-        job = queue.Job(user_id=uid, kind="fap", source="https://example.invalid/x",
-                        quality="720p", cost=1.5)
+        # The statement that used to read `cur.lastrowid`. `runner` is never called —
+        # `_insert_row` only writes the row — but `Job` requires it, so it is a lambda
+        # that would raise if the queue ever did pick this up.
+        job = queue.Job(user_id=uid, chat_id=uid, kind="fap",
+                        source="https://example.invalid/x", quality="720p", cost=1.5,
+                        runner=_never_runs)
         row_id = queue._insert_row(job)
         check("an insert hands back its new id", isinstance(row_id, int) and row_id > 0, True)
         second = queue._insert_row(job)
@@ -480,13 +494,39 @@ def part_d_live():
         db.execute("UPDATE jobs SET size_bytes = ? WHERE id = ?", (big, row_id))
         check("a 2 GB size fits",
               int(db.scalar("SELECT size_bytes FROM jobs WHERE id = ?", (row_id,))), big)
+
+        # The auto-delete queue, against the real thing. `_connect_postgres` applies
+        # `SCHEMA_PG` on every connect, so this table appears on an existing Supabase
+        # project by itself — the `missing_tables` check at the top of part D is what
+        # proves it arrived, and this proves it is usable once it has.
+        channel = -1001234567890                  # a channel id: -100 and ten digits
+        db.execute("INSERT INTO deletions (chat_id, message_id, job_id, due_at, "
+                   "created_at) VALUES (?, ?, ?, ?, ?)",
+                   (channel, 4242, row_id, db.now() + 1800, db.now()))
+        queued = db.one("SELECT chat_id, message_id, job_id FROM deletions "
+                        "WHERE chat_id = ?", (channel,))
+        check("a delivery can be put on the clock", queued["message_id"], 4242)
+        check("and a channel's negative id survives the round trip",
+              int(queued["chat_id"]), channel)
+        check("the job it came from is a 64-bit id, like jobs.id",
+              int(queued["job_id"]), row_id)
+        # Filtered to this test's own chat rather than counted, because this is the one
+        # part that runs against a database with real traffic in it — a bare
+        # `len(due())` would be a different number depending on who was using the bot.
+        mine = lambda rows: [int(r["message_id"]) for r in rows                 # noqa: E731
+                             if int(r["chat_id"]) == channel]
+        check("nothing is due yet", mine(expiry.due()), [])
+        check("and it is due once its half hour is up",
+              mine(expiry.due(at=db.now() + 1801)), [4242])
     finally:
         try:
+            db.execute("DELETE FROM deletions WHERE chat_id = ?", (-1001234567890,))
             db.execute("DELETE FROM ledger WHERE user_id = ?", (uid,))
             db.execute("DELETE FROM jobs WHERE user_id = ?", (uid,))
             db.execute("DELETE FROM users WHERE user_id = ?", (uid,))
         except Exception as exc:                       # pragma: no cover
             print(f"  !! could not clean up user {uid}: {exc}")
+        object.__setattr__(cfg, "free_credits_on_join", joining_bonus)
         object.__setattr__(cfg, "database_url", "")
         db._conn = None
 
