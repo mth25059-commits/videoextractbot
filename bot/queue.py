@@ -140,12 +140,12 @@ class NoSpace(RuntimeError):
 # --- the jobs table ----------------------------------------------------------
 
 def _insert_row(job: Job) -> int:
-    cur = db.execute(
+    return db.insert_id(
         """INSERT INTO jobs (user_id, kind, source, status, quality, cost, charged, created_at)
-           VALUES (?, ?, ?, 'queued', ?, ?, 1, ?)""",
+           VALUES (?, ?, ?, 'queued', ?, ?, 1, ?)
+           RETURNING id""",
         (job.user_id, job.kind, job.source[:500], job.quality, job.cost, db.now()),
     )
-    return int(cur.lastrowid)
 
 
 def _mark(job: Job, status: str, error: str | None = None, charged: bool | None = None) -> None:

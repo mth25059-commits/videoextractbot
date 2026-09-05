@@ -178,7 +178,7 @@ async def run() -> None:
         raise ConfigError(why)
 
     db.connect()
-    log.info("database ready at %s", cfg.db_path)
+    log.info("database ready — %s", db.describe())
 
     # Before any worker starts, and before the disk guard has to make anyone wait
     # for space: nothing under work_dir can belong to a job now, because no job

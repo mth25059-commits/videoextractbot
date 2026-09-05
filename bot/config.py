@@ -299,6 +299,20 @@ class Config:
     cost_fap_720: float = 1.5
     cost_fap_1080: float = 2.0
 
+    # Where the five tables live. Empty is the normal case: one SQLite file under
+    # `data/`, on this box, gone when this box is. A Postgres URL here — in practice
+    # Supabase's *pooler* string, port 6543, because a VPS behind NAT cannot hold a
+    # direct 5432 session open — puts users, credits, the ledger and the job history
+    # somewhere that outlives the rental. Nothing else changes: `bot/db.py` keeps the
+    # same four helpers and no call site knows which one answered.
+    #
+    # What does *not* move with it, said plainly because it is money: `paysvc`'s own
+    # `data/orders.json` is a local file, so a box lost mid-payment loses the orders
+    # that had not settled yet — the FamApp mailbox is still the record of truth for
+    # those. `data/terabot.session` stays local too, and should: it is an MTProto
+    # credential tied to one bot token.
+    database_url: str = ""
+
     @property
     def db_path(self) -> Path:
         return ROOT / "data" / "bot.db"
@@ -355,6 +369,7 @@ def load() -> Config:
         cost_fap_480=_num("COST_FAP_480", 1),
         cost_fap_720=_num("COST_FAP_720", 1.5),
         cost_fap_1080=_num("COST_FAP_1080", 2),
+        database_url=os.environ.get("DATABASE_URL", "").strip(),
     )
 
     if not cfg.admin_ids:

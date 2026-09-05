@@ -201,11 +201,11 @@ async def auto_confirm_enabled(ttl: float = 60.0) -> bool:
 
 # --- the orders table --------------------------------------------------------
 
-def get_order(order_id: str) -> db.sqlite3.Row | None:
+def get_order(order_id: str) -> db.Row | None:
     return db.one("SELECT * FROM orders WHERE order_id = ?", (order_id,))
 
 
-def open_orders(user_id: int | None = None) -> list[db.sqlite3.Row]:
+def open_orders(user_id: int | None = None) -> list[db.Row]:
     """Everything still waiting for money — what the boot-time reconcile walks."""
     if user_id is None:
         return db.query("SELECT * FROM orders WHERE status IN ('pending','holding') "

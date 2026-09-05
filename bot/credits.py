@@ -132,9 +132,15 @@ def refund(user_id: int, amount: float, reason: str, ref: str | None = None) -> 
         return balance(user_id)
     with db.transaction() as conn:
         new_balance = _move(conn, user_id, abs(amount), reason, ref)
+        # Spelled out rather than `MAX(0, total_spent - ?)`: SQLite's two-argument
+        # MAX is a scalar function, Postgres's MAX is an aggregate and takes one
+        # argument, so that version is a syntax error the moment the database is
+        # Supabase. The floor matters — a refund larger than the lifetime spend
+        # would otherwise leave a negative total on the admin's own card.
         conn.execute(
-            "UPDATE users SET total_spent = MAX(0, total_spent - ?) WHERE user_id = ?",
-            (abs(amount), user_id),
+            "UPDATE users SET total_spent = CASE WHEN total_spent < ? THEN 0 "
+            "ELSE total_spent - ? END WHERE user_id = ?",
+            (abs(amount), abs(amount), user_id),
         )
         return new_balance
 
@@ -169,7 +175,7 @@ def can_afford(user_id: int, amount: float) -> bool:
     return balance(user_id) + 1e-9 >= amount
 
 
-def history(user_id: int, limit: int = 10) -> list[db.sqlite3.Row]:
+def history(user_id: int, limit: int = 10) -> list[db.Row]:
     return db.query(
         "SELECT * FROM ledger WHERE user_id = ? ORDER BY id DESC LIMIT ?",
         (user_id, limit),

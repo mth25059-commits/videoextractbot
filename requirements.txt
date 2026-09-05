@@ -9,8 +9,9 @@ tgcrypto==1.2.5
 curl-cffi==0.7.4
 
 # QR rendering for the payment screen. The Node gateway hands us a UPI URI and
-# an SVG; Telegram cannot send SVG as a photo, so we draw our own PNG.
-qrcode==7.4.2
+# the QR's own matrix; Telegram cannot send SVG as a photo, so `payments.py` draws
+# the PNG itself from that matrix. No `qrcode` encoder here on purpose — a second
+# encoder in this process could draw a perfectly valid code for the wrong amount.
 pillow==10.4.0
 
 # VPS status panel in the admin menu.
@@ -26,4 +27,10 @@ rarfile==4.2
 
 # 7z, pure Python, so nothing outside pip has to be on the box.
 py7zr==0.22.0
+
+# Postgres, for when DATABASE_URL is set — which is how credits outlive the VPS
+# they were bought on. Unused and unimported on a default install: `bot/db.py`
+# imports it inside the branch that needs it, so a SQLite box never loads it.
+# The [binary] extra ships libpq, so there is no apt package to remember.
+psycopg[binary]==3.2.1
 
