@@ -260,6 +260,19 @@ async def fetch_to_mp4(
         "-movflags", "+faststart",
         "-progress", "pipe:1",
         "-nostats",
+        # `-f mp4` is not a default worth trusting — it is the whole reason this
+        # command works. ffmpeg picks its muxer from the *last* extension, and the
+        # output here is `…mp4.part`, so it sees `part`, knows no such format, and
+        # refuses before opening a socket:
+        #
+        #     Unable to choose an output format for 'x.mp4.part'
+        #     Error opening output files: Invalid argument
+        #
+        # Which reached the user as "Download failed. (Error opening output files:
+        # Invalid argument)" and a refund, on every HLS job ever run. The `.part`
+        # name stays — a half-written file must not look finished — and the format
+        # is stated instead of implied.
+        "-f", "mp4",
         str(partial),
     ]
 
@@ -336,6 +349,7 @@ async def remux_to_mp4(src: Path, out_path: Path,
         "-i", str(src),
         "-c", "copy",
         "-movflags", "+faststart",
+        "-f", "mp4",          # the output is `…mp4.part`; see fetch_to_mp4 above
         str(partial),
     ]
     code, _, stderr = await _run(cmd, timeout=3600)
