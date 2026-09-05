@@ -23,6 +23,12 @@ def _load_dotenv(path: Path) -> None:
     reads as the *string* "# not yet" — which looks set, so the bot would promise
     credits that confirm themselves while no inbox is actually being watched.
     A `#` with no space before it is kept, because passwords contain them.
+
+    Quotes: exactly one matched surrounding pair comes off, which is what
+    `paysvc/server.js:loadEnv` does. That matters beyond tidiness — `PAYSVC_SECRET`
+    and `IMAP_APP_PASSWORD` are read by both this process and the Node one, and a
+    secret the two disagree about is a callback the payment service rejects for a
+    bad signature, with nothing in either log to say why.
     """
     if not path.exists():
         return
@@ -32,14 +38,17 @@ def _load_dotenv(path: Path) -> None:
             continue
         key, _, value = line.partition("=")
         key = key.strip()
-        # Before trimming: once the leading spaces are gone, `KEY=   # note` looks
-        # like a value that simply begins with '#'.
-        if not value.lstrip()[:1] in ('"', "'"):
+        bare = value.strip()
+        if len(bare) >= 2 and bare[0] == bare[-1] and bare[0] in ('"', "'"):
+            value = bare[1:-1]
+        else:
+            # Before trimming: once the leading spaces are gone, `KEY=   # note`
+            # looks like a value that simply begins with '#'.
             for i in range(len(value)):
                 if value[i] == "#" and (i == 0 or value[i - 1].isspace()):
                     value = value[:i]
                     break
-        value = value.strip().strip('"').strip("'")
+            value = value.strip()
         os.environ.setdefault(key, value)
 
 
