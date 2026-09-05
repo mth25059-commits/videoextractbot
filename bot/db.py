@@ -1,11 +1,15 @@
 """
-Storage — one SQLite file, four tables, WAL mode so the bot and the payment
+Storage — one SQLite file, five tables, WAL mode so the bot and the payment
 callback can both write without locking each other out.
 
 Credits are stored as REAL because the price list has half-credits in it
 (1080p costs 1.5). Every change to a balance goes through `credits.py`, which
 writes a ledger row in the same transaction — so a balance can always be
 explained by adding up its history.
+
+`settings` is the one table nothing else in here writes: it holds prices the
+admin has changed since install, and `settings.py` is the only reader. See that
+module for why a price cannot live in `cfg`.
 """
 
 from __future__ import annotations
@@ -78,6 +82,12 @@ CREATE TABLE IF NOT EXISTS orders (
 );
 CREATE INDEX IF NOT EXISTS idx_orders_user ON orders(user_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status);
+
+CREATE TABLE IF NOT EXISTS settings (
+    key        TEXT PRIMARY KEY,
+    value      TEXT NOT NULL,
+    updated_at INTEGER NOT NULL
+);
 """
 
 

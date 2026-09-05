@@ -32,8 +32,7 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import media
-from .config import cfg
+from . import media, settings
 
 log = logging.getLogger(__name__)
 
@@ -101,14 +100,20 @@ def price_for(size_bytes: int) -> float:
     the two cannot drift. Beyond 2 GB the same per-GB rate continues rather than
     the archive being refused, because Telegram can still deliver the individual
     videos inside it.
+
+    The two rungs are read per call, not captured at import, because both are
+    editable from the admin panel — a price this function returns has to be the
+    price the panel last set, not the one the process booted with.
     """
+    upto_1gb = settings.get("cost_zip_upto_1gb")
+    upto_2gb = settings.get("cost_zip_upto_2gb")
     if size_bytes <= GB:
-        return float(cfg.cost_zip_upto_1gb)
+        return upto_1gb
     if size_bytes <= 2 * GB:
-        return float(cfg.cost_zip_upto_2gb)
+        return upto_2gb
     extra_gb = -(-(size_bytes - 2 * GB) // GB)  # ceil
-    per_gb = float(cfg.cost_zip_upto_2gb) / 2.0
-    return round(float(cfg.cost_zip_upto_2gb) + extra_gb * per_gb, 2)
+    per_gb = upto_2gb / 2.0
+    return round(upto_2gb + extra_gb * per_gb, 2)
 
 
 def kind_of(path: Path) -> str:

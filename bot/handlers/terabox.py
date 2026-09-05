@@ -44,7 +44,7 @@ from pyrogram import Client, filters
 from pyrogram.types import CallbackQuery, Message
 
 from .. import (credits, download, egress, keyboards as kb, media, providers,
-                queue as jobq, scratch, state, ui, uploader)
+                queue as jobq, scratch, settings, state, ui, uploader)
 from ..config import cfg
 from ..providers.terabox import terabox
 from . import _gate
@@ -53,15 +53,31 @@ log = logging.getLogger(__name__)
 
 MODE = "await_links"
 
-PROMPT = (
-    "📦 <b>Send me your Terabox links</b>\n\n"
-    f"Up to <b>{cfg.max_links_per_batch}</b> at a time — one per line, or all in "
-    "one message, whichever is easier.\n\n"
-    f"💰 <b>{cfg.cost_terabox_per_link:g} credit per link</b>. Highest quality is "
-    "picked automatically.\n\n"
-    "<i>They are fetched in the background and each video is sent the moment it "
-    "is ready, so you do not have to wait for the whole batch.</i>"
-)
+
+def prompt() -> str:
+    """
+    The 📦 Terabox screen, built per message.
+
+    It used to be a module-level f-string, which meant the price in it was the price
+    at *import* — so an admin who changed the rate saw the old number on this screen
+    until the next restart, which is exactly the thing Prices exists to avoid.
+
+    The wording is "per video", not "per link". A folder link is one link and up to
+    `terabox_max_files_per_link` videos, and it is charged per video — the old text
+    said "credit per link", which read as a promise that a 10-video folder cost one
+    credit.
+    """
+    per_video = settings.get("cost_terabox_per_link")
+    return (
+        "📦 <b>Send me your Terabox links</b>\n\n"
+        f"Up to <b>{cfg.max_links_per_batch}</b> at a time — one per line, or all in "
+        "one message, whichever is easier.\n\n"
+        f"💰 <b>{per_video:g} credit{'' if per_video == 1 else 's'} per video</b> — a "
+        "plain link is one video, a folder link is charged for what is inside it. "
+        "Highest quality is picked automatically.\n\n"
+        "<i>They are fetched in the background and each video is sent the moment it "
+        "is ready, so you do not have to wait for the whole batch.</i>"
+    )
 
 
 def _work_dir(job: jobq.Job) -> Path:
@@ -212,7 +228,12 @@ async def _deliver(client: Client, job: jobq.Job) -> None:
 
         # One video was paid for at the confirm; a folder holds more. Take the rest
         # now, before a byte is fetched, and cut the list to what the balance covers.
-        covered = jobq.charge_more(job, cfg.cost_terabox_per_link, len(found))
+        #
+        # At the price the *confirm screen quoted*, which is `job.cost` — one video's
+        # worth, set when the job was made and not yet touched by this call. Reading
+        # the live price here instead would let an admin's edit land between the tap
+        # and the folder listing and charge more than the button said.
+        covered = jobq.charge_more(job, job.cost, len(found))
         short = len(found) - covered
         found = found[:covered]
         job.expected = len(found)
@@ -373,7 +394,7 @@ async def _queue_batch(client: Client, message: Message, user_id: int,
             chat_id=message.chat.id,
             kind="terabox",
             runner=lambda job: _deliver(client, job),
-            cost=cfg.cost_terabox_per_link,
+            cost=settings.get("cost_terabox_per_link"),
             title="",
             source=url,
             token=parked.token,
@@ -497,7 +518,13 @@ async def _offer_batch(client: Client, message: Message, user_id: int,
     # confirm holds one video per link and `_deliver` takes the rest through
     # `jobq.charge_more` before it fetches anything. Quoting ten videos' worth up
     # front would freeze credits for videos that in most cases are not there.
-    cost = len(trimmed) * cfg.cost_terabox_per_link
+    #
+    # Read once, into a local, and used for the sum, the trim and every figure on the
+    # screen. Calling `settings.get` four separate times would leave a window in which
+    # an admin's edit made the quoted total disagree with the per-video figure printed
+    # under it, on the same card.
+    per_video = settings.get("cost_terabox_per_link")
+    cost = len(trimmed) * per_video
     have = credits.balance(user_id)
 
     extra = ""
@@ -510,7 +537,7 @@ async def _offer_batch(client: Client, message: Message, user_id: int,
         return
 
     parked = state.park(user_id, "terabox_batch", links=trimmed)
-    affordable = min(len(trimmed), int(have // cfg.cost_terabox_per_link))
+    affordable = min(len(trimmed), int(have // per_video))
     short = ""
     if affordable < len(trimmed):
         short = (f"\n\n⚠️ Your balance covers <b>{affordable}</b> of them. "
@@ -518,11 +545,11 @@ async def _offer_batch(client: Client, message: Message, user_id: int,
 
     await say(
         f"📦 <b>{len(trimmed)} link(s) ready</b>\n\n"
-        f"💰 <b>{cfg.cost_terabox_per_link:g} credit(s) per video</b> · "
+        f"💰 <b>{per_video:g} credit(s) per video</b> · "
         f"you have <b>{have:g}</b>\n"
         f"🎚 Quality: <b>highest available</b>\n\n"
         f"<i>A single link is one video, so this starts at {cost:g}. A folder link is "
-        f"{cfg.cost_terabox_per_link:g} for each video inside it — counted once I have "
+        f"{per_video:g} for each video inside it — counted once I have "
         f"read the folder, never before.</i>{short}{extra}",
         kb.confirm_batch(parked.token, len(trimmed), cost))
 
@@ -550,7 +577,7 @@ async def _home_key(client: Client, message: Message, text: str) -> bool:
 
     if text == kb.KEY_TERABOX:
         blocked = terabox.unavailable()
-        sent = await message.reply_text(blocked or PROMPT,
+        sent = await message.reply_text(blocked or prompt(),
                                        reply_markup=kb.back_to_menu("◀  Menu"),
                                        disable_web_page_preview=True)
         if blocked:
@@ -578,7 +605,7 @@ async def _home_key(client: Client, message: Message, text: str) -> bool:
         from . import zipfiles
 
         state.clear_mode(user_id)
-        await message.reply_text(zipfiles.PROMPT,
+        await message.reply_text(zipfiles.prompt(),
                                  reply_markup=kb.back_to_menu("◀  Menu"))
 
     elif text == kb.KEY_MENU:
@@ -608,7 +635,7 @@ def register(app: Client, jobs: jobq.Queue) -> None:
         state.set_mode(cq.from_user.id, MODE,
                        panel=cq.message.id, chat=cq.message.chat.id)
         await cq.answer()
-        await cq.message.edit_text(PROMPT, reply_markup=kb.back_to_menu("◀  Menu"),
+        await cq.message.edit_text(prompt(), reply_markup=kb.back_to_menu("◀  Menu"),
                                    disable_web_page_preview=True)
 
     @app.on_message(filters.private & filters.text

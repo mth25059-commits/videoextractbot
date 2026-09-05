@@ -18,7 +18,7 @@ from pyrogram import Client, filters
 from pyrogram.types import CallbackQuery, Message
 
 from .. import (broadcast, credits, db, egress, keyboards as kb, nightly,
-                queue as jobq, scratch, state, ui)
+                queue as jobq, scratch, settings, state, ui)
 from ..config import cfg
 from ..providers import terabox as tb
 from . import _gate
@@ -357,6 +357,47 @@ async def daily_report(jobs: jobq.Queue) -> str:
     return "\n".join(parts)
 
 
+#: The mode names the price prompt uses, one per editable key. Built from
+#: `settings.EDITABLE` rather than typed out so that adding a seventh price cannot
+#: leave a button whose reply nothing is listening for.
+PRICE_MODES = tuple(f"admin_price_{name}" for name in settings.EDITABLE)
+
+
+def _prices_card() -> str:
+    """
+    Every editable price, and whether it has been changed since install.
+
+    The rate is shown as both sentences — "₹1 = 1.5 credits" is what the operator
+    thinks in, "1 credit = ₹0.67" is what a user asks about — because deriving the
+    second one in the head is exactly how the wrong number ends up on a screen.
+    """
+    live = settings.all_prices()
+    per_rupee = live["credits_per_rupee"]
+    if per_rupee > 0:
+        rate = (f"💱 ₹1 = <b>{per_rupee:g} credits</b>"
+                f"  ·  1 credit = <b>₹{1 / per_rupee:.2f}</b>")
+    else:
+        rate = "💱 <i>the rate is not set</i>"
+    lines = ["⚙️ <b>Prices</b>", "──────────────────", rate, ""]
+    for name, (label, unit, _ceiling) in settings.EDITABLE.items():
+        if name == "credits_per_rupee":
+            continue
+        mark = "" if settings.is_default(name) else "  ✏️"
+        lines.append(f"• {label} — <b>{live[name]:g} {unit}</b>{mark}")
+    lines += [
+        "",
+        "<i>✏️ marks a price changed from the installed default. Tap one to change "
+        "it — it applies to the very next message, with no restart.</i>",
+    ]
+    return "\n".join(lines)
+
+
+def _price_keys():
+    """The ⚙️ Prices keyboard. One button per editable key, in `EDITABLE` order."""
+    labels = {name: label for name, (label, _u, _c) in settings.EDITABLE.items()}
+    return kb.admin_prices(list(settings.EDITABLE), labels)
+
+
 def register(app: Client, jobs: jobq.Queue) -> None:
 
     async def _deny(cq: CallbackQuery) -> bool:
@@ -478,6 +519,94 @@ def register(app: Client, jobs: jobq.Queue) -> None:
             await cq.message.edit_text(
                 "🎁 <b>Give credits</b>\n\nSend the user id first.",
                 reply_markup=kb.back_to_menu("✖  Cancel"))
+
+    @app.on_callback_query(filters.regex(r"^adm:price$"))
+    async def prices_panel(client: Client, cq: CallbackQuery) -> None:
+        if await _deny(cq):
+            return
+        state.clear_mode(cq.from_user.id)
+        await cq.answer()
+        await cq.message.edit_text(_prices_card(), reply_markup=_price_keys())
+
+    @app.on_callback_query(filters.regex(r"^adm:price:reset:([a-z0-9_]+)$"))
+    async def price_reset(client: Client, cq: CallbackQuery) -> None:
+        if await _deny(cq):
+            return
+        name = cq.data.split(":")[3]
+        if name not in settings.EDITABLE:
+            await cq.answer("No such price.", show_alert=True)
+            return
+        state.clear_mode(cq.from_user.id)
+        value = settings.reset(name)
+        log.info("admin %s reset %s to the installed default %g",
+                 cq.from_user.id, name, value)
+        await cq.answer(f"{settings.EDITABLE[name][0]} is back to {value:g}.")
+        await cq.message.edit_text(_prices_card(), reply_markup=_price_keys())
+
+    @app.on_callback_query(filters.regex(r"^adm:price:([a-z0-9_]+)$"))
+    async def price_ask(client: Client, cq: CallbackQuery) -> None:
+        """
+        Ask for one new number.
+
+        Declared *after* the reset handler above on purpose: `adm:price:reset:…` also
+        matches this pattern, with `reset` captured as the name. Pyrogram stops at the
+        first callback handler whose filter matches, so the specific one has to come
+        first — the `EDITABLE` check below is the second line of defence, not the first.
+        """
+        if await _deny(cq):
+            return
+        name = cq.data.split(":")[2]
+        if name not in settings.EDITABLE:
+            await cq.answer("No such price.", show_alert=True)
+            return
+        label, unit, ceiling = settings.EDITABLE[name]
+        now = settings.get(name)
+        state.set_mode(cq.from_user.id, f"admin_price_{name}")
+        await cq.answer()
+        await cq.message.edit_text(
+            f"⚙️ <b>{ui.esc(label)}</b>\n"
+            "──────────────────\n"
+            f"Now: <b>{now:g} {unit}</b>\n\n"
+            f"Send the new number. Halves are fine (<code>1.5</code>), up to "
+            f"<b>{ceiling:g}</b>.\n\n"
+            "<i>It applies to the very next message — nothing restarts.</i>",
+            reply_markup=kb.admin_price_edit(name, settings.is_default(name)))
+
+    @app.on_message(filters.private & filters.text
+                    & ~filters.command(["start", "balance"])
+                    & _gate.in_mode(*PRICE_MODES))
+    async def price_typed(client: Client, message: Message) -> None:
+        """The number typed after ⚙️ Prices. The mode gate does the addressing."""
+        user_id = message.from_user.id
+        if not _is_admin(user_id):
+            # Belt and braces, as in `admin_typing`: the mode is only ever set by an
+            # admin-only callback, but authority is re-checked in every handler.
+            return
+        entry = state.get_mode(user_id)
+        if not entry:            # swept between the filter and here — very unlikely
+            return
+        name = entry[0][len("admin_price_"):]
+        if name not in settings.EDITABLE:
+            state.clear_mode(user_id)
+            return
+        label, unit, _ceiling = settings.EDITABLE[name]
+        # A comma for a decimal point, and a stray ₹, because that is how the number
+        # gets typed on a phone. Anything else `settings.set` refuses in words.
+        text = (message.text or "").strip().replace(",", ".").lstrip("₹").strip()
+        try:
+            value = settings.set(name, text)
+        except settings.BadValue as exc:
+            # The message was written to be read by the admin, so it is shown as-is.
+            # The mode stays set: a typo should cost one more line, not another trip
+            # through the menu.
+            await message.reply_text(f"⚠️ {ui.esc(exc)}\n\nSend the number again.")
+            return
+        state.clear_mode(user_id)
+        await _gate.forget(message, "the typed price")
+        log.info("admin %s set %s = %g", user_id, name, value)
+        await message.reply_text(
+            f"✅ <b>{ui.esc(label)} is now {value:g} {unit}</b>\n\n{_prices_card()}",
+            reply_markup=_price_keys())
 
     @app.on_callback_query(filters.regex(r"^adm:orders$"))
     async def orders(client: Client, cq: CallbackQuery) -> None:

@@ -13,6 +13,7 @@ from pyrogram.types import InlineKeyboardMarkup as Markup
 from pyrogram.types import KeyboardButton as Key
 from pyrogram.types import ReplyKeyboardMarkup as Keys
 
+from . import settings
 from .config import cfg
 
 #: The persistent keyboard's labels. They arrive as ordinary text messages, so the
@@ -113,14 +114,16 @@ def topup_presets() -> Markup:
     Each button says what the money *buys*, not just what it costs — `₹20 → 30 cr`.
     The rate is on the screen above it as a sentence, but this is the moment someone
     is deciding how much to send, and a rate they have to do arithmetic on is a rate
-    they will get wrong. It is computed from `cfg.credits_per_rupee`, so changing the
-    rate changes the buttons and there is no second number to keep in step.
+    they will get wrong. It is computed from the live `credits_per_rupee`, so changing
+    the rate — from the admin panel, with no restart — changes these buttons and there
+    is no second number to keep in step.
     """
     floor = cfg.min_topup_rupees
+    per_rupee = settings.get("credits_per_rupee")
     presets = [floor, floor * 5, floor * 10, floor * 25]
     rows, current = [], []
     for rupees in presets:
-        gives = rupees * cfg.credits_per_rupee
+        gives = rupees * per_rupee
         current.append(Btn(f"₹{rupees:g}  →  {gives:g} cr",
                            callback_data=f"pay:amt:{rupees:g}"))
         if len(current) == 2:
@@ -225,10 +228,46 @@ def admin_menu() -> Markup:
         [Btn("🔗  Shared Links", callback_data="adm:links:0"),
          Btn("📨  Send Report", callback_data="adm:report")],
         [Btn("🔑  Terabox Health", callback_data="adm:tbox")],
-        [Btn("💰  Payments", callback_data="adm:orders")],
+        [Btn("⚙️  Prices", callback_data="adm:price"),
+         Btn("💰  Payments", callback_data="adm:orders")],
         [Btn("📢  Announce to everyone", callback_data="adm:say")],
         [Btn("◀  Back", callback_data="nav:menu")],
     ])
+
+
+def admin_prices(names: list[str], labels: dict[str, str]) -> Markup:
+    """
+    One button per editable price, two to a row.
+
+    The order is `settings.EDITABLE`'s, which is the order the wizard asks in and the
+    order the card above lists them — three screens reading the same dict rather than
+    three hand-kept lists.
+    """
+    rows, current = [], []
+    for name in names:
+        current.append(Btn(labels.get(name, name), callback_data=f"adm:price:{name}"))
+        if len(current) == 2:
+            rows.append(current)
+            current = []
+    if current:
+        rows.append(current)
+    rows.append([Btn("🛠  Admin", callback_data="adm:open")])
+    return Markup(rows)
+
+
+def admin_price_edit(name: str, is_default: bool) -> Markup:
+    """
+    Under the "send me the new number" prompt for one price.
+
+    The reset button is hidden while the price still *is* the installed default,
+    because a button that does nothing invites a second press and then a bug report.
+    """
+    rows = []
+    if not is_default:
+        rows.append([Btn("↩  Back to the installed default",
+                         callback_data=f"adm:price:reset:{name}")])
+    rows.append([Btn("✖  Cancel", callback_data="adm:price")])
+    return Markup(rows)
 
 
 def admin_announce(token: str) -> Markup:

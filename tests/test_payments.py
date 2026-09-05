@@ -62,8 +62,8 @@ _pyrogram.filters, _pyrogram.types = _filters, _types
 sys.modules.update({"pyrogram": _pyrogram, "pyrogram.filters": _filters,
                     "pyrogram.types": _types})
 
-from bot import callback_server, credits, db, payments   # noqa: E402
-from bot.handlers import payment as payment_ui           # noqa: E402
+from bot import callback_server, credits, db, payments, settings   # noqa: E402
+from bot.handlers import payment as payment_ui                     # noqa: E402
 
 SECRET = "test-secret-0123456789abcdef"
 PORT = 8747
@@ -72,10 +72,18 @@ PORT = 8747
 # is how a frozen Config gets varied for a test. The joining bonus is switched off
 # here so that a balance of 20 means "the top-up, and nothing else" — the bonus
 # has its own test in test_queue.py.
-for _mod in (payments, callback_server, payment_ui, credits):
+#
+# `settings` is in the list because the rate is no longer read off `cfg` at all:
+# `payments.credits_for` goes through `settings.get("credits_per_rupee")`, which
+# falls back to *its own* module's `cfg` when there is no row in the settings table —
+# and every `fresh_db()` here starts with that table empty. So `settings.cfg` is what
+# ₹1 = 1 credit means in this file, and `forget_cache()` drops anything the overlay
+# memoised from the real `.env` before the rebind.
+for _mod in (payments, callback_server, payment_ui, credits, settings):
     _mod.cfg = replace(_mod.cfg, paysvc_secret=SECRET, paid_callback_port=PORT,
-                       min_topup_rupees=20, rupees_per_credit=1,
-                       free_credits_on_join=0)
+                       min_topup_rupees=20, credits_per_rupee=1,
+                       rupees_per_credit=1, free_credits_on_join=0)
+settings.forget_cache()
 
 passed = failed = 0
 
@@ -98,6 +106,11 @@ def fresh_db():
     conn.executescript(db.SCHEMA)
     conn.commit()
     db._conn = conn
+    # The overlay caches per process, and this is a different database from the one it
+    # last read. Nothing here writes a price, so the cache would only ever hold the
+    # fallback — but a stale cache surviving a database swap is the kind of thing that
+    # is true until the day it is not.
+    settings.forget_cache()
 
 
 # --- the fake paysvc ---------------------------------------------------------
@@ -169,11 +182,26 @@ payments._call = svc
 
 def test_pricing():
     print("\npricing")
+    fresh_db()
     check("₹1 = 1 credit", payments.credits_for(20), 20.0)
     check("₹250 = 250 credits", payments.credits_for(250), 250.0)
-    payments.cfg = replace(payments.cfg, rupees_per_credit=2)
-    check("RUPEES_PER_CREDIT=2 halves it", payments.credits_for(20), 10.0)
-    payments.cfg = replace(payments.cfg, rupees_per_credit=1)
+
+    # The rate is a *stored setting* now, not a frozen config field, so this is how it
+    # is varied — and the point of the assertion has moved with it: what used to prove
+    # "RUPEES_PER_CREDIT is honoured" now proves that a rate written while the process
+    # is running is the rate the very next order is priced at. That is the whole reason
+    # the settings table exists.
+    settings.set("credits_per_rupee", 0.5)
+    check("a rate halved mid-run halves the next order",
+          payments.credits_for(20), 10.0)
+    settings.set("credits_per_rupee", 1.5)
+    check("and ₹20 at 1.5 is 30 credits", payments.credits_for(20), 30.0)
+    check("which is exactly what the button promises",
+          payments.credits_for(20), round(20 * settings.get("credits_per_rupee"), 2))
+    check("reset goes back to what .env installed",
+          settings.reset("credits_per_rupee"), settings.cfg.credits_per_rupee)
+    check("and the row is gone with it",
+          settings.is_default("credits_per_rupee"), True)
 
     order_id = payments.new_order_id(6100000001)
     check("an order id rides inside callback data",

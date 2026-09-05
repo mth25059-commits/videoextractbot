@@ -258,8 +258,14 @@ _shutil.rmtree(_ar, ignore_errors=True)
 #
 # This is the bug that shipped: the ladder above has charged 6 credits for a
 # 2-3 GB archive from the beginning, and the menu's price list stopped at 2 GB —
-# so the feature was real and invisible. `PROMPT` is now rendered from
+# so the feature was real and invisible. `zipfiles.prompt()` is now rendered from
 # `price_for`, and this section is what holds the two together.
+#
+# It is a function, not the module constant it used to be, because `price_for` reads
+# the two ZIP rungs out of the settings table — a constant built at import would have
+# quoted the price the process started with for ever, and the point of that table is
+# that the admin can change a price without a restart. The last block below is what
+# proves the screen actually follows a change.
 #
 # Importing the handler needs pyrogram, which nothing else in this file wants, so
 # it is stubbed here rather than at the top.
@@ -316,22 +322,76 @@ def _stub_pyrogram() -> None:
 _stub_pyrogram()
 from bot.handlers import zipfiles                     # noqa: E402
 
+quoted = zipfiles.prompt()
 for label, size in (("up to 1 GB", GB), ("1 – 2 GB", 2 * GB),
                     ("2 – 3 GB", 3 * GB), ("3 – 4 GB", 4 * GB)):
     row = f"• {label} — <b>{archive.price_for(size):g} credits</b>"
-    check(f"{label} is quoted at what it costs", row in zipfiles.PROMPT, True)
+    check(f"{label} is quoted at what it costs", row in quoted, True)
 
 check("and the 2-3 GB row really does say 6 credits",
-      "• 2 – 3 GB — <b>6 credits</b>" in zipfiles.PROMPT, True)
+      "• 2 – 3 GB — <b>6 credits</b>" in quoted, True)
 
 print("\nthe prompt offers every format the readers handle")
 for word in ("ZIP", "RAR", "7z"):
-    check(f"{word} is offered", word in zipfiles.PROMPT, True)
+    check(f"{word} is offered", word in quoted, True)
 check("the per-extra-GB rate is quoted, and matches the ladder",
       f"+{archive.price_for(5 * GB) - archive.price_for(4 * GB):g} credits</b> per extra GB"
-      in zipfiles.PROMPT, True)
+      in quoted, True)
 check("and splitting is promised rather than a skip",
-      "in parts" in zipfiles.PROMPT, True)
+      "in parts" in quoted, True)
+
+# --- a price changed mid-run reaches the screen and the charge ----------------
+#
+# The reason `price_for` and `prompt()` read the settings table instead of `cfg`: the
+# admin's ⚙️ Prices screen and the setup wizard both write it, and neither restarts the
+# bot. Without this, the change would be stored, reported as saved, and then quoted
+# wrongly to every user until the next deploy.
+print("\na rung changed while the bot runs")
+import sqlite3                                          # noqa: E402
+
+from bot import db as _db, settings as _settings        # noqa: E402
+
+
+def _pricefail(name, value) -> bool:
+    """True when `settings.set` refused this, with a sentence fit to show an admin."""
+    try:
+        _settings.set(name, value)
+    except _settings.BadValue as exc:
+        return bool(str(exc).strip())
+    return False
+
+
+_pricedir = tempfile.mkdtemp(prefix="terabot-price-")
+_conn = sqlite3.connect(Path(_pricedir) / "test.db", check_same_thread=False)
+_conn.row_factory = sqlite3.Row
+_conn.executescript(_db.SCHEMA)
+_conn.commit()
+_db._conn = _conn
+_settings.forget_cache()
+
+check("the installed default is in force to begin with",
+      _settings.is_default("cost_zip_upto_1gb"), True)
+_settings.set("cost_zip_upto_1gb", 3)
+check("price_for follows the new rung", archive.price_for(GB), 3.0)
+check("and the quoted list is rebuilt from it",
+      "• up to 1 GB — <b>3 credits</b>" in zipfiles.prompt(), True)
+check("the rungs above it are untouched", archive.price_for(2 * GB), 4.0)
+_settings.set("cost_zip_upto_2gb", 5)
+check("the 2 GB rung moves the per-GB rate with it",
+      archive.price_for(3 * GB), 7.5)
+check("which the screen quotes too",
+      "• 2 – 3 GB — <b>7.5 credits</b>" in zipfiles.prompt(), True)
+check("a price is refused above its ceiling",
+      _pricefail("cost_zip_upto_1gb", 5000), True)
+check("and refused at zero — free is not a price",
+      _pricefail("cost_zip_upto_1gb", 0), True)
+_settings.reset("cost_zip_upto_1gb")
+_settings.reset("cost_zip_upto_2gb")
+check("reset puts the installed ladder back", archive.price_for(GB), 2.0)
+_conn.close()
+_shutil.rmtree(_pricedir, ignore_errors=True)
+_db._conn = None
+_settings.forget_cache()
 
 # --- over the ceiling is parts, not a refusal --------------------------------
 #

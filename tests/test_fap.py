@@ -32,7 +32,7 @@ import json                                  # noqa: E402
 import re                                    # noqa: E402
 import time                                  # noqa: E402
 
-from bot import keyboards as kb, queue as jobq, scratch, ui   # noqa: E402
+from bot import keyboards as kb, queue as jobq, scratch, settings, ui   # noqa: E402
 from bot.config import cfg                   # noqa: E402
 from bot.handlers import fap                 # noqa: E402
 from bot.providers import ResolveError       # noqa: E402
@@ -65,6 +65,32 @@ def raises(name, exc, fn):
         return
     failed += 1
     print(f"  FAIL {name} - nothing raised")
+
+
+def _isolate_settings() -> None:
+    """
+    Point `bot.settings` at an empty throwaway database before the first price is read.
+
+    Every rung on the ladder below comes from `settings.get`, which looks for a row in
+    the `settings` table and only falls back to `.env` when there is none. Left alone
+    that means importing this file opens the operator's real `data/bot.db` — creating
+    it if it is not there — and then a price the admin changed last week decides
+    whether these assertions pass. In memory, with the schema and nothing in it, the
+    fallback is the only path and the numbers below mean what they say.
+    """
+    import sqlite3                                       # noqa: PLC0415
+
+    from bot import db                                   # noqa: PLC0415
+
+    conn = sqlite3.connect(":memory:", check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    conn.executescript(db.SCHEMA)
+    conn.commit()
+    db._conn = conn
+    settings.forget_cache()
+
+
+_isolate_settings()
 
 
 #: The resolver's answer for one real video, kept verbatim apart from shortened URLs.
@@ -159,13 +185,20 @@ check("1440p can never cost more than the dearest rung",
 check("an unknown height is charged as the cheapest",
       fapmod.price_of(None), cfg.cost_fap_480)
 
-# The prices are settings, so the ladder has to be read at call time. Frozen at
-# import, an operator's .env would be quietly ignored and the menu would charge
-# something the guide does not say.
-object.__setattr__(cfg, "cost_fap_720", 3.0)
-check("the menu follows cfg, not a constant",
+# The three prices are editable while the bot runs — from ⚙️ Prices and from the setup
+# wizard — so the ladder has to be read at call time. Frozen at import, a change would
+# be ignored until the next restart and the menu would charge something the panel says
+# it does not. Driven through `settings.set`, because that is the path an admin's tap
+# takes; poking the frozen `cfg` proves nothing now that nothing reads it directly.
+settings.set("cost_fap_720", 3.0)
+check("the menu follows a price changed mid-run",
       [c for _s, c in fapmod.menu(got)], [1, 3.0, 2])
-object.__setattr__(cfg, "cost_fap_720", 1.5)
+check("and so does an off-ladder height priced into that rung",
+      fapmod.price_of(481), 3.0)
+check("the rungs either side are untouched",
+      (fapmod.price_of(480), fapmod.price_of(1080)), (1.0, 2.0))
+check("reset goes back to what .env installed",
+      settings.reset("cost_fap_720"), settings.cfg.cost_fap_720)
 check("and back again", [c for _s, c in fapmod.menu(got)], [1, 1.5, 2])
 
 
@@ -472,6 +505,10 @@ def test_the_whole_route_from_key_to_video():
     conn.executescript(db.SCHEMA)
     conn.commit()
     db._conn = conn
+    # The database this run prices against has just been swapped. The overlay's read
+    # cache belongs to the one before it, and a cached price surviving a swap is the
+    # kind of thing that is true until the day it is not.
+    settings.forget_cache()
 
     USER, BOT = 6100000001, 7200000002
     credits.ensure(USER, "the operator", "operator")

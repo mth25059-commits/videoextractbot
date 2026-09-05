@@ -39,20 +39,33 @@ from . import _gate
 
 log = logging.getLogger(__name__)
 
-PROMPT = (
-    "🗂 <b>Send me a ZIP, RAR or 7z file</b>\n\n"
-    "I will open it here, pull out every video inside, and send each one as a "
-    "playable video — so nothing has to be downloaded or unpacked on your phone.\n\n"
-    f"💰 <b>Price</b>\n"
-    f"  • up to 1 GB — <b>{archive.price_for(archive.GB):g} credits</b>\n"
-    f"  • 1 – 2 GB — <b>{archive.price_for(2 * archive.GB):g} credits</b>\n"
-    f"  • 2 – 3 GB — <b>{archive.price_for(3 * archive.GB):g} credits</b>\n"
-    f"  • 3 – 4 GB — <b>{archive.price_for(4 * archive.GB):g} credits</b>\n"
-    f"  • bigger — <b>+{archive.price_for(3 * archive.GB) - archive.price_for(2 * archive.GB):g}"
-    f" credits</b> per extra GB\n\n"
-    "<i>One price for the whole archive, however many videos are in it. A video too "
-    "big for Telegram is sent in parts instead of being skipped.</i>"
-)
+def prompt() -> str:
+    """
+    The 🗂 File screen, built per message.
+
+    A function rather than a module constant because every figure on it comes from
+    `archive.price_for`, which now reads the two ZIP rungs out of `settings` — a
+    constant would have frozen the price list at import and gone stale the first time
+    the admin changed a rung.
+
+    The ladder is rendered from `price_for` rather than written out, so the screen and
+    the charge cannot drift apart.
+    """
+    gb = archive.GB
+    per_extra = archive.price_for(3 * gb) - archive.price_for(2 * gb)
+    return (
+        "🗂 <b>Send me a ZIP, RAR or 7z file</b>\n\n"
+        "I will open it here, pull out every video inside, and send each one as a "
+        "playable video — so nothing has to be downloaded or unpacked on your phone.\n\n"
+        f"💰 <b>Price</b>\n"
+        f"  • up to 1 GB — <b>{archive.price_for(gb):g} credits</b>\n"
+        f"  • 1 – 2 GB — <b>{archive.price_for(2 * gb):g} credits</b>\n"
+        f"  • 2 – 3 GB — <b>{archive.price_for(3 * gb):g} credits</b>\n"
+        f"  • 3 – 4 GB — <b>{archive.price_for(4 * gb):g} credits</b>\n"
+        f"  • bigger — <b>+{per_extra:g} credits</b> per extra GB\n\n"
+        "<i>One price for the whole archive, however many videos are in it. A video too "
+        "big for Telegram is sent in parts instead of being skipped.</i>"
+    )
 
 
 
@@ -289,7 +302,7 @@ def register(app: Client, jobs: jobq.Queue) -> None:
     async def open_zip(client: Client, cq: CallbackQuery) -> None:
         state.set_mode(cq.from_user.id, "zip")
         await cq.answer()
-        await cq.message.edit_text(PROMPT, reply_markup=kb.back_to_menu())
+        await cq.message.edit_text(prompt(), reply_markup=kb.back_to_menu())
 
     @app.on_message(filters.private & filters.document)
     async def got_document(client: Client, message: Message) -> None:

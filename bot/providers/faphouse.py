@@ -40,6 +40,7 @@ import logging
 import re
 from urllib.parse import quote, urlparse
 
+from .. import settings
 from ..config import cfg
 from .base import Provider, Resolved, ResolveError, Stream, register
 
@@ -78,12 +79,13 @@ def rungs() -> tuple[tuple[int, str, float], ...]:
     """
     The priced ladder — (exact height, button label, credits).
 
-    Read from `cfg` on every call rather than frozen at import time: the prices are
-    settings, and a test that overrides one expects the menu to follow it.
+    Read live on every call rather than frozen at import time: the three prices are
+    editable from the admin panel and the setup wizard, so a menu built after a
+    change has to show the new number without the process being restarted.
     """
-    return ((480, "480p", cfg.cost_fap_480),
-            (720, "720p", cfg.cost_fap_720),
-            (1080, "1080p", cfg.cost_fap_1080))
+    return ((480, "480p", settings.get("cost_fap_480")),
+            (720, "720p", settings.get("cost_fap_720")),
+            (1080, "1080p", settings.get("cost_fap_1080")))
 
 
 def price_of(height: int | None) -> float:

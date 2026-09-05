@@ -29,7 +29,7 @@ from typing import Any, Awaitable, Callable
 from pyrogram import Client, filters
 from pyrogram.types import CallbackQuery, Message
 
-from .. import credits, keyboards as kb, payments, state, ui
+from .. import credits, keyboards as kb, payments, settings, state, ui
 from ..config import cfg
 from . import _gate
 
@@ -258,7 +258,8 @@ def register(app: Client) -> None:
         state.clear_mode(cq.from_user.id)
         await cq.answer()
         await _show(cq, ui.topup_intro(credits.balance(cq.from_user.id),
-                                       cfg.min_topup_rupees, cfg.rupees_per_credit),
+                                       cfg.min_topup_rupees,
+                                       settings.rupees_per_credit()),
                     kb.topup_presets())
 
     @app.on_callback_query(filters.regex(r"^pay:amt:(\d+(?:\.\d+)?)$"))

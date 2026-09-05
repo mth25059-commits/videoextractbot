@@ -1887,6 +1887,7 @@ def test_a_folder_is_priced_per_video():
 
     from bot import credits, db, state, uploader
     from bot import queue as jobq
+    from bot import settings
     from bot.config import cfg
     from bot.handlers import terabox as handler
     from bot.queue import Queue
@@ -1897,6 +1898,26 @@ def test_a_folder_is_priced_per_video():
     conn.executescript(db.SCHEMA)
     conn.commit()
     db._conn = conn
+    # A database has just been swapped in under the overlay; anything it memoised from
+    # whatever ran before this belongs to a file that is no longer being read.
+    settings.forget_cache()
+
+    # --- 0. the screen quotes the price that is in force now ----------------------
+    # This was a module-level f-string, so the number on it was the number at *import*:
+    # an admin who used ⚙️ Prices saw the old price on this screen until the next
+    # restart, while being charged the new one. A price on a screen that the bot is not
+    # charging is the one bug in this area a user can actually catch the bot out on.
+    settings.set("cost_terabox_per_link", 3)
+    check("the prompt quotes a price changed while the bot is running",
+          "<b>3 credits per video</b>" in handler.prompt(), True)
+    settings.set("cost_terabox_per_link", 1)
+    check("and a price of exactly one is not '1 credits'",
+          "<b>1 credit per video</b>" in handler.prompt(), True)
+    check("the old per-link wording is gone for good",
+          "per link" in handler.prompt(), False)
+    check("reset puts what .env installed back on the screen",
+          f"<b>{settings.reset('cost_terabox_per_link'):g} credit" in handler.prompt(),
+          True)
 
     PER = cfg.cost_terabox_per_link
     USER, BOT = 6100000001, 7200000002

@@ -238,11 +238,12 @@ def guide(is_new: bool = False) -> str:
     first-timer and someone coming back with a question want the same facts, and two
     versions would mean the one nobody reads is the one that goes stale.
 
-    Every price and limit is read from config here rather than typed, because this
-    page is the thing people quote back when they think they were overcharged. The
-    imports are function-local on purpose: this module is imported by the queue and
-    the providers, and it stays free of module-level bot imports so it cannot join
-    an import cycle.
+    Every price and limit is read live here rather than typed, because this page is
+    the thing people quote back when they think they were overcharged — so the prices
+    come from `settings`, which follows an admin edit immediately, and only the limits
+    that need a restart anyway come from `cfg`. The imports are function-local on
+    purpose: this module is imported by the queue and the providers, and it stays free
+    of module-level bot imports so it cannot join an import cycle.
 
     Ordered by what a new user needs first, not by what is interesting: the two
     services and how to trigger them, then price, then how long it takes, then what
@@ -250,11 +251,13 @@ def guide(is_new: bool = False) -> str:
     is the most common question and the honest answer — a per-file cap at the other
     end that no amount of credit changes — is not guessable from the outside.
     """
-    from . import archive
+    from . import archive, settings
     from .config import cfg
 
     gb = archive.GB
     per_extra_gb = archive.price_for(3 * gb) - archive.price_for(2 * gb)
+    per_video = settings.get("cost_terabox_per_link")
+    per_credit = settings.rupees_per_credit()
     if is_new:
         # The joining gift is announced here rather than on a fourth message,
         # because for a new user this page *is* the first screen — `nav:menu`
@@ -286,8 +289,8 @@ def guide(is_new: bool = False) -> str:
         "one per line.",
         "<b>3.</b> Confirm the price, then wait. The bar moves while it works and the "
         "video arrives right here.",
-        f"💰 <b>{cfg.cost_terabox_per_link:g} "
-        f"credit{'' if cfg.cost_terabox_per_link == 1 else 's'}</b> per <b>video</b>. "
+        f"💰 <b>{per_video:g} "
+        f"credit{'' if per_video == 1 else 's'}</b> per <b>video</b>. "
         f"A single link is one video. A folder link sends up to "
         f"<b>{cfg.terabox_max_files_per_link} videos</b> and is priced for what is "
         "actually inside it — counted after I have read it, so nothing is held for "
@@ -299,9 +302,10 @@ def guide(is_new: bool = False) -> str:
         "video actually has.",
         "<b>3.</b> Tap one. That is when the credit is taken, and the video comes back "
         "here.",
-        f"💰 <b>480p {cfg.cost_fap_480:g}</b>  ·  <b>720p {cfg.cost_fap_720:g}</b>  ·  "
-        f"<b>1080p {cfg.cost_fap_1080:g}</b> credits. A quality the video does not have "
-        "is not offered at all, so you never pay for one and get another.",
+        f"💰 <b>480p {settings.get('cost_fap_480'):g}</b>  ·  "
+        f"<b>720p {settings.get('cost_fap_720'):g}</b>  ·  "
+        f"<b>1080p {settings.get('cost_fap_1080'):g}</b> credits. A quality the video "
+        "does not have is not offered at all, so you never pay for one and get another.",
         "",
         "<b>🗂 File — what to do</b>",
         "Send the archive as a <b>file</b> (📎 → <i>File</i>), not as a photo or a video. "
@@ -319,8 +323,8 @@ def guide(is_new: bool = False) -> str:
         "<code>/balance</code> — what you have left",
         "",
         "<b>💰 Credits</b>",
-        f"💱 {rate_text(cfg.rupees_per_credit)} — so ₹{cfg.min_topup_rupees:g} is "
-        f"<b>{cfg.min_topup_rupees / (cfg.rupees_per_credit or 1):g} credits</b>.",
+        f"💱 {rate_text(per_credit)} — so ₹{cfg.min_topup_rupees:g} is "
+        f"<b>{cfg.min_topup_rupees / (per_credit or 1):g} credits</b>.",
         "<b>How to add them</b>",
         "<b>1.</b> ☰ <b>Menu</b> → 💳 <b>Add Credit</b>.",
         f"<b>2.</b> Pick an amount, or type your own — minimum "

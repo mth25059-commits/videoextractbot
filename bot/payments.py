@@ -34,7 +34,7 @@ import urllib.request
 from dataclasses import dataclass
 from typing import Any
 
-from . import credits, db
+from . import credits, db, settings
 from .config import cfg
 
 log = logging.getLogger(__name__)
@@ -93,9 +93,20 @@ class Settlement:
 
 
 def credits_for(rupees: float) -> float:
-    """₹1 = 1 credit by default; RUPEES_PER_CREDIT changes the rate, not the code."""
-    rate = cfg.rupees_per_credit or 1
-    return round(rupees / rate, 2)
+    """
+    What a rupee amount buys, at the rate in force right now.
+
+    Multiplies by `credits_per_rupee` rather than dividing by its reciprocal, so this
+    is character-for-character the arithmetic `keyboards.topup_presets()` does when it
+    prints `₹20 → 30 cr`. Two expressions that are algebraically equal are not equal
+    in floating point, and the one place they must never disagree is the button
+    promising an amount and the ledger granting it.
+
+    Read through `settings`, so a rate changed from the admin panel applies to the
+    very next order rather than to the next restart.
+    """
+    per_rupee = settings.get("credits_per_rupee") or 1
+    return round(rupees * per_rupee, 2)
 
 
 def new_order_id(user_id: int) -> str:

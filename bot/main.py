@@ -42,7 +42,7 @@ except Exception as exc:
     _config_problem(exc)
     raise SystemExit(2) from None
 
-from . import callback_server, db, media, nightly, payments, scratch
+from . import callback_server, db, media, nightly, payments, scratch, settings
 from .handlers import admin, fap, payment, start as start_handlers, terabox, zipfiles
 from .queue import Queue
 
@@ -199,7 +199,8 @@ async def run() -> None:
         log.warning("PAYSVC_SECRET is empty — top-ups are disabled until it is set")
     else:
         log.info("top-ups on · paysvc %s · callback 127.0.0.1:%s · ₹1 = %g credits",
-                 cfg.paysvc_url, cfg.paid_callback_port, cfg.credits_per_rupee)
+                 cfg.paysvc_url, cfg.paid_callback_port,
+                 settings.get("credits_per_rupee"))
 
     await jobs.start()
     janitor = asyncio.create_task(scratch.janitor(), name="scratch-janitor")
