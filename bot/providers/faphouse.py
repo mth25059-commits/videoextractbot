@@ -1,7 +1,7 @@
 """
 The link route — one link, a quality menu, one video.
 
-**The site is not scraped, and this module does not know which site it is.** the operator
+**The site is not scraped, and this module does not know which site it is.** The operator
 runs a resolver of his own and this is only its client: the link the user pasted is
 appended to a fixed endpoint, and what comes back already names every rendition the
 video has. Which sites that resolver accepts is *its* business and changes without
@@ -160,7 +160,7 @@ def menu(resolved: Resolved) -> list[tuple[Stream, float]]:
     """
     The buttons to show: one per priced rung the video actually has, cheapest first.
 
-    the operator's rule, in his words — *"if video 1080 m nhi hai available toh opt hi do
+    The operator's rule, in their words — *"if video 1080 m nhi hai available toh opt hi do
     dega"*: a rung the video does not have is not offered at all, rather than offered
     and then quietly served something else. Renditions below the cheapest rung (the
     measured sample carries a 240p) are hidden for the same reason in reverse — a
@@ -209,7 +209,8 @@ def wire_url(url: str) -> str:
     The pasted link as a *server* would see it — its `#fragment` cut off.
 
     Every link off this site carries one, and it is only referral tracking: the two
-    the operator sent both end `#dmVwPU1haW4gcGFnZSZ2ZWI9Rmlyc3QgNjAgb24gbWFpbg==`, which
+    samples this was built against both end
+    `#dmVwPU1haW4gcGFnZSZ2ZWI9Rmlyc3QgNjAgb24gbWFpbg==`, which
     is `vep=Main page&veb=First 60 on main`. **A browser never transmits the fragment
     at all** — it is the one part of a URL that stays on the client — so a resolver
     fetching the page has never received it from a real visitor, and percent-encoding

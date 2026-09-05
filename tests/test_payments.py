@@ -238,7 +238,7 @@ def payments_parse(text):
 async def test_settle_once():
     print("\nsettle() is idempotent")
     USER = 4242
-    credits.ensure(USER, "the operator", "operator")
+    credits.ensure(USER, "Operator", "operator")
     start = credits.balance(USER)
 
     quote = await payments.quote(USER, 20)

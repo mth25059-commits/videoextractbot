@@ -40,7 +40,7 @@ async def forget(message, why: str = "") -> bool:
     """
     Take one message back out of the chat. True if it went.
 
-    the operator's rule — *"user bhje to cht se delete ho"* — and it is applied to every
+    The operator's rule — *"user bhje to cht se delete ho"* — and it is applied to every
     input the bot accepts: the pasted link, the pressed key, the uploaded archive.
     What is left on screen is the one panel the flow owns and then the video, which
     is the whole point of the single-panel design.

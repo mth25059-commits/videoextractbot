@@ -395,7 +395,7 @@ _settings.forget_cache()
 
 # --- over the ceiling is parts, not a refusal --------------------------------
 #
-# the operator's words: "koi video file break kre … max jitte file ho wo sab break krdo".
+# The operator's words: "koi video file break kre … max jitte file ho wo sab break krdo".
 # A video Telegram will not take whole is still the video that was paid for.
 print("\nsend_in_parts cuts instead of refusing")
 import asyncio                                           # noqa: E402
@@ -466,7 +466,7 @@ _shutil.rmtree(_tmp2, ignore_errors=True)
 
 # --- nothing stays on the VPS ------------------------------------------------
 #
-# the operator's item 9: "vps pe kuch save na ho". Two halves, tested separately,
+# The operator's item 9: "vps pe kuch save na ho". Two halves, tested separately,
 # because they fail separately. The job deletes its own files as it goes — that is
 # `scratch.claim`/`release` and the early archive unlink — and the janitor deletes
 # what a job never got the chance to, which is the only half that survives a
@@ -618,7 +618,7 @@ _shutil.rmtree(_scratch_root, ignore_errors=True)
 
 # --- the user's own upload does not stay in the chat -------------------------
 #
-# the operator's item 7: "user bhje to cht se delete ho". The pasted link and the pressed
+# The operator's item 7: "user bhje to cht se delete ho". The pasted link and the pressed
 # key were already taken back out; the uploaded archive was the one input still
 # sitting there for ever, and a 2 GB RAR in a chat is the whole of the ask. The
 # password typed for a locked one was worse — it stayed too, and it is the most
@@ -645,7 +645,7 @@ _conn.commit()
 db._conn = _conn
 
 _USER = 6100000001
-credits.ensure(_USER, "the operator", "operator")
+credits.ensure(_USER, "Operator", "operator")
 credits.grant(_USER, 50.0, "test float")
 state.clear_mode(_USER)
 

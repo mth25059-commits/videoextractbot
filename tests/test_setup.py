@@ -398,7 +398,7 @@ def part_c_a_second_run():
         api_id="12345678",
         api_hash="ab" * 16,
         upi_id="operator@fam",
-        upi_payee_name="the operator",
+        upi_payee_name="Operator",
         imap_user="operator@gmail.com",
         imap_app_password="abcdefghijklmnop",
         paysvc_secret="s3cret-token",

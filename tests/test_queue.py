@@ -84,7 +84,7 @@ async def main():
     await q.start()
 
     USER, CHAT = 111, 111
-    user, is_new = credits.ensure(USER, "the operator", "operator")
+    user, is_new = credits.ensure(USER, "Operator", "operator")
     check("new user got the joining bonus", user.credits, 2.0)
     check("is_new flag", is_new, True)
 
@@ -396,7 +396,7 @@ async def main():
 
     # --- pro-rata: an archive is one price for many videos -------------------
     #
-    # the operator approved this rule directly ("han ye plan sahi hai"): pay for what
+    # The operator approved this rule directly ("han ye plan sahi hai"): pay for what
     # arrived. Charging for 10 when 7 came is an overcharge; refunding all 10 hands
     # over 7 videos free. Nothing arriving is still a *failure*, and that path is
     # untouched — the runner raises, so the full refund above still applies.

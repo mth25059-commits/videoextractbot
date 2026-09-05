@@ -212,7 +212,7 @@ for n in range(11):
 db.execute("INSERT INTO jobs (user_id, kind, source, status, cost, created_at) "
            "VALUES (?,?,?,?,?,?)", (6100000001, "terabox", "", "done", 1, now))
 db.execute("INSERT INTO users (user_id, first_name, joined_at, last_seen) "
-           "VALUES (?,?,?,?)", (6100000001, "the operator", now, now))
+           "VALUES (?,?,?,?)", (6100000001, "Operator", now, now))
 
 card, total, shown = admin._links_card(0)
 check("the log counts only rows that have a source", total, 11)

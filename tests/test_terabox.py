@@ -257,7 +257,7 @@ def test_batch_charges_whoever_pressed_the_button():
     db._conn = conn
 
     USER, BOT = 6100000001, 7200000002          # the human, and the bot itself
-    credits.ensure(USER, "the operator", "operator")
+    credits.ensure(USER, "Operator", "operator")
     opening = credits.balance(USER)
 
     class Sent:
@@ -1654,7 +1654,7 @@ def test_one_panel_from_prompt_to_video():
     db._conn = conn
 
     USER, BOT = 6100000001, 7200000002
-    credits.ensure(USER, "the operator", "operator")
+    credits.ensure(USER, "Operator", "operator")
     state.clear_mode(USER)
     live: dict[int, "Msg"] = {}
 
@@ -1938,7 +1938,7 @@ def test_a_folder_is_priced_per_video():
     #: unmistakable: every negative assertion below looks for one word of it, and a
     #: neutral-looking sample would have passed on the old code too.
     TITLE = "Bhabhi Ji Ghar Par Hai S03E44 1080p.mp4"
-    credits.ensure(USER, "the operator", "operator")
+    credits.ensure(USER, "Operator", "operator")
     credits.grant(USER, 5.0, "test float")
     state.clear_mode(USER)
 

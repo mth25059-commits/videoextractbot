@@ -144,7 +144,7 @@ async def send_video(
     Probes for duration/resolution and cuts a thumbnail first — without those
     Telegram delivers a grey document instead of a video with a preview frame.
 
-    **`caption` is accepted and ignored.** the operator's rule, and it applies to every
+    **`caption` is accepted and ignored.** The operator's rule, and it applies to every
     route: *"only video"* — no title under the clip, on Terabox, ZIP or the link
     route. The parameter stays so callers, tests and `send_in_parts` keep their
     shape, and so the decision lives in one place instead of three call sites that

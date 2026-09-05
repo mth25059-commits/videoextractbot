@@ -2,7 +2,7 @@
 The nightly health report.
 
 One message to every admin, once a day, so the state of the box is something that
-arrives rather than something somebody remembers to go and look at. the operator asked
+arrives rather than something somebody remembers to go and look at. The operator asked
 for midnight IST; the box runs on UTC, so the default is 18:30 UTC and the
 conversion lives in `cfg.daily_report_utc` with the arithmetic written down next
 to it.

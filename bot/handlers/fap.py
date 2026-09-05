@@ -16,7 +16,7 @@ until the service has answered — so it happens immediately, and it happens for
 private or deleted video costs nothing, because nothing has been charged by the time we
 find out.
 
-**Only the qualities the video actually has are offered.** the operator's rule, in his words:
+**Only the qualities the video actually has are offered.** The operator's rule, in their words:
 *"if video 1080 m nhi hai available toh opt hi do dega"*. A rung the video does not
 carry gets no button at all, rather than a button that quietly serves something
 shorter. The card names which ones are missing, so an absent 1080p reads as the video's

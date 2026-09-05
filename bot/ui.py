@@ -179,7 +179,7 @@ def panel_title(index: int = 0, total: int = 1) -> str:
     """
     What the working panel calls the video: `Video 2 of 10`. Never its name.
 
-    **the operator's rule, and the reason is Telegram rather than taste** — *"tg ko n pta
+    **The operator's rule, and the reason is Telegram rather than taste** — *"tg ko n pta
     chle ki ye sb hora"*. The finished file has been anonymous all along (it goes up
     under its on-disk name, `01.mp4`), and there has never been a caption. The panel
     was the hole: a *text* message, live in the chat for the whole job, carrying the

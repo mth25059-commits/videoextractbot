@@ -227,7 +227,7 @@ check("a trailing ? is not doubled",
 object.__setattr__(cfg, "fap_api", "https://resolver.example/api/faphouse/mrx")
 
 # Every link off this site carries a #fragment, and a browser never transmits one.
-# the operator's two samples both end #dmVwPU1haW4gcGFnZSZ2ZWI9Rmlyc3QgNjAgb24gbWFpbg==,
+# The operator's two samples both end #dmVwPU1haW4gcGFnZSZ2ZWI9Rmlyc3QgNjAgb24gbWFpbg==,
 # which decodes to "vep=Main page&veb=First 60 on main" — referral tracking, nothing
 # the resolver can use.
 TRACKED = LINK + "#dmVwPU1haW4gcGFnZSZ2ZWI9Rmlyc3QgNjAgb24gbWFpbg=="
@@ -510,7 +510,7 @@ def test_the_whole_route_from_key_to_video():
     settings.forget_cache()
 
     USER, BOT = 6100000001, 7200000002
-    credits.ensure(USER, "the operator", "operator")
+    credits.ensure(USER, "Operator", "operator")
     credits.grant(USER, 10, "test float")
     state.clear_mode(USER)
     live: dict[int, object] = {}
