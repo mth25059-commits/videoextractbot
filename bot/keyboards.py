@@ -89,6 +89,19 @@ def guide_nav(is_new: bool = False) -> Markup:
 
 
 
+def join_gate(channels) -> Markup:
+    """
+    One URL button per channel, then the verify button on its own row.
+
+    A URL button, not a callback: tapping it opens the channel inside Telegram, and
+    the user comes back to a chat that still has ✅ waiting. The verify button is
+    last because it is the one thing they should press *after* the others.
+    """
+    rows = [[Btn(f"📢  Join {c.label}", url=c.link)] for c in channels]
+    rows.append([Btn("✅  I've joined — check", callback_data="join:ok")])
+    return Markup(rows)
+
+
 def back_to_menu(label: str = "◀  Back to Menu") -> Markup:
     return Markup([[Btn(label, callback_data="nav:menu")]])
 

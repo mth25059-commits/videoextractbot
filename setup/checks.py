@@ -276,6 +276,98 @@ def proxy(url: str) -> Result:
     return Result(alive, f"{egress.describe(url)} — {detail}")
 
 
+def channel(entry: str, api_id: str, api_hash: str, bot_token: str) -> Result:
+    """
+    One force-join channel: does it resolve, and is the bot an administrator in it?
+
+    Both halves matter and only the second is easy to get wrong. `get_chat_member`
+    is how the gate decides whether to let somebody in, and a bot that is only a
+    *member* of a channel cannot call it — Telegram answers `ChatAdminRequired`.
+    The gate is deliberately fail-open, so that mistake does not lock anybody out;
+    it silently lets everybody through instead, which is the worse failure because
+    nothing looks broken. Catching it here is the whole reason this check exists.
+
+    Parsed by `joingate._one`, not by a second parser living in the wizard: the ref
+    checked here has to be the exact ref the bot will use, or this proves nothing.
+    """
+    from bot import joingate
+
+    parsed = joingate._one(entry)
+    if parsed is None:
+        return Result(False, f"{entry} cannot be used as a force-join channel",
+                      hint="A private channel needs its id and its invite link, "
+                           "written as -1001234567890|https://t.me/+AbCdEf.")
+
+    try:
+        _lend_an_event_loop()
+        from pyrogram import Client
+    except ModuleNotFoundError as exc:                        # pragma: no cover
+        return Result(False, f"pyrogram is not installed ({exc.name})",
+                      hint="pip install -r requirements.txt")
+
+    async def go() -> Result:
+        app = Client(name="setup-channel", api_id=int(api_id), api_hash=api_hash,
+                     bot_token=bot_token, in_memory=True)
+        try:
+            await app.start()
+        except Exception as exc:
+            return Result(False, f"could not reach Telegram ({type(exc).__name__})",
+                          hint="The bot token or api pair is the problem, not the "
+                               "channel — the review page will say which.")
+        try:
+            chat = await app.get_chat(parsed.ref)
+            me = await app.get_chat_member(parsed.ref, "me")
+        except Exception as exc:
+            name = type(exc).__name__
+            if name in ("UsernameNotOccupied", "UsernameInvalid"):
+                return Result(False, f"there is no channel called {parsed.ref}",
+                              hint="Check the spelling. It is the name in the "
+                                   "channel's t.me link, not its title.")
+            if name in ("UserNotParticipant", "UserNotParticipantError"):
+                return Result(False, f"{parsed.ref} exists, but the bot is not in it",
+                              hint="Channel → Manage → Administrators → Add Admin → "
+                                   "your bot. Admin, not subscriber: a plain member "
+                                   "cannot be asked who else is in the channel.")
+            if name in ("ChatAdminRequired", "ChatAdminRequiredError"):
+                return Result(
+                    False, f"{parsed.ref} refused the question — the bot is not an admin",
+                    hint="Channel → Manage → Administrators → Add Admin → your bot. "
+                         "No permissions need ticking; being an admin is enough.")
+            if name in ("ChannelPrivate", "PeerIdInvalid", "ChannelInvalid"):
+                return Result(
+                    False, f"{parsed.ref} is not visible to this bot",
+                    hint="Add the bot to the channel first: channel → Manage → "
+                         "Administrators → Add Admin → your bot. A bot cannot even "
+                         "see a private channel it is not in.")
+            return Result(False, f"{name}: {exc}")
+        finally:
+            try:
+                await app.stop()
+            except Exception:                                 # pragma: no cover
+                pass
+
+        title = getattr(chat, "title", None) or str(parsed.ref)
+        members = getattr(chat, "members_count", None)
+        if not joingate.joined(getattr(me, "status", None)):
+            return Result(False, f"{title} — the bot is not in this channel",
+                          hint="Channel → Manage → Administrators → Add Admin → "
+                               "your bot.")
+        if joingate.status_name(getattr(me, "status", None)) not in joingate.ADMIN:
+            return Result(
+                False, f"{title} — the bot is a member but NOT an admin",
+                hint="It has to be an admin to see who else is in the channel; as "
+                     "a plain member Telegram refuses the question. Channel → "
+                     "Manage → Administrators → Add Admin → your bot. No "
+                     "permissions need to be granted, admin is enough.")
+        crowd = f", {members:,} members" if members else ""
+        return Result(True, f"{title} — bot is an admin{crowd}")
+
+    try:
+        return _run(go())
+    except Exception as exc:                                  # pragma: no cover
+        return Result(False, f"{type(exc).__name__}: {exc}")
+
+
 def paysvc(url: str) -> Result:
     """
     The Node payment service, asked whether it is up.

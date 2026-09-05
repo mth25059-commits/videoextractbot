@@ -196,6 +196,33 @@ def part_a_validators():
     check("time of day", accepts(ask.hhmm, "18:30"), "18:30")
     truthy("25:00 refused", refuses(ask.hhmm, "25:00"))
 
+    # Force-join channels. All three spellings of a public one are the same channel,
+    # so they must normalise to one string — `.env` should not record which way the
+    # operator happened to write it, and neither should the review page.
+    check("a channel with the @", accepts(ask.channel, " @myupdates "), "@myupdates")
+    check("without the @", accepts(ask.channel, "myupdates"), "@myupdates")
+    check("pasted as a link", accepts(ask.channel, "https://t.me/myupdates"),
+          "@myupdates")
+    check("pasted as a bare t.me link", accepts(ask.channel, "t.me/myupdates/"),
+          "@myupdates")
+    # A private channel needs both halves: the id is the only thing membership can be
+    # checked against, the invite link is the only thing that can go on a button.
+    check("a private channel keeps both halves",
+          accepts(ask.channel, "-1001234567890 | https://t.me/+AbCdEfGh"),
+          "-1001234567890|https://t.me/+AbCdEfGh")
+    check("and a scheme-less invite link gets one",
+          accepts(ask.channel, "-1001234567890|t.me/+AbCdEfGh"),
+          "-1001234567890|https://t.me/+AbCdEfGh")
+    # This is the mistake everybody makes: Telegram's own "copy link" on a private
+    # channel hands over the half that cannot be checked.
+    truthy("an invite link on its own is refused",
+           refuses(ask.channel, "https://t.me/+AbCdEfGh"))
+    truthy("an old joinchat link too", refuses(ask.channel, "t.me/joinchat/AbCdEfGh"))
+    truthy("an id with no invite link is refused",
+           refuses(ask.channel, "-1001234567890"))
+    truthy("a name with a space is refused", refuses(ask.channel, "my updates"))
+    truthy("and one too short", refuses(ask.channel, "@ab"))
+
     # Masking is not decoration: these strings go on a review page somebody may
     # screenshot to ask for help.
     check("a short secret is hidden whole", ask.mask("abc123"), "••••••")
@@ -390,7 +417,7 @@ def part_c_a_second_run():
 
     # This is the identity that makes `python -m setup` safe to run again:
     #   what is installed  ->  Answers  ->  .env  ->  what is installed
-    # If it is not the identity, pressing Enter twelve times changes something, and
+    # If it is not the identity, pressing Enter thirteen times changes something, and
     # the operator has no way to know which thing.
     a = wizard.Answers(
         bot_token="1234567890:AAFexampleTokenFromBotFatherNotReal",
@@ -414,6 +441,7 @@ def part_c_a_second_run():
         database_url="postgresql://postgres.abc:pw@aws-0-ap-south-1.pooler."
                      "supabase.com:6543/postgres",
         fap_api="https://resolver.example.com/api",
+        force_join=["@myupdates", "-1001234567890|https://t.me/+AbCdEfGh"],
     )
     with tempfile.TemporaryDirectory() as tmp:
         path = Path(tmp) / ".env"
@@ -424,7 +452,7 @@ def part_c_a_second_run():
     for attr in ("bot_token", "admin_ids", "api_id", "api_hash", "upi_id",
                  "upi_payee_name", "imap_user", "imap_app_password", "imap_sender",
                  "paysvc_secret", "cookies", "proxies", "database_url", "fap_api",
-                 *wizard.PRICES.values()):
+                 "force_join", *wizard.PRICES.values()):
         check(f"survives a round trip · {attr}",
               getattr(again, attr), getattr(a, attr))
     truthy("top-ups still on", again.payments_on)
@@ -435,6 +463,7 @@ def part_c_a_second_run():
     check("nothing installed reads as the shipped rate",
           blank.credits_per_rupee, wizard.Answers().credits_per_rupee)
     check("no cookies is an empty list, not [''])", blank.cookies, [])
+    check("no force-join is an empty list too", blank.force_join, [])
     truthy("top-ups off when there is no UPI id", not blank.payments_on)
     check("the FamApp sender has a default", blank.imap_sender, "no-reply@famapp.in")
 
@@ -455,11 +484,11 @@ def part_c_a_second_run():
           wizard.Answers().credits_per_rupee)
 
     section("C2 · the review page renders without asking anything")
-    # `show` is called for all twelve lines before a single question is asked, so a
+    # `show` is called for all thirteen lines before a single question is asked, so a
     # blank Answers has to be printable. A crash here would land on the one screen
     # the operator is meant to read.
     empty = wizard.Answers()
-    check("twelve questions, twelve renderers", len(wizard.QUESTIONS), wizard.TOTAL)
+    check("one renderer per question", len(wizard.QUESTIONS), wizard.TOTAL)
     for n, q in enumerate(wizard.QUESTIONS, 1):
         truthy(f"line {n:>2} · {q.label}", isinstance(q.show(empty), str))
         truthy(f"line {n:>2} · {q.label} has a label", bool(q.label))
@@ -472,6 +501,14 @@ def part_c_a_second_run():
            a.cookies[0] not in wizard.QUESTIONS[5].show(a))
     truthy("a proxy password is not printed on the review",
            ":p@" not in wizard.QUESTIONS[6].show(a))
+    # The gate's own line: the channels are not secret, so they are named in full —
+    # but a private entry's invite link is a working way in and stays off the page.
+    joins = wizard.QUESTIONS[-1].show(a)
+    truthy("the force-join line names the channel", "@myupdates" in joins)
+    truthy("and the private one by id", "-1001234567890" in joins)
+    truthy("but not its invite link", "+AbCdEfGh" not in joins)
+    truthy("an empty force-join says the bot answers everybody",
+           "off" in wizard.QUESTIONS[-1].show(empty).lower())
 
 
 # --------------------------------------------------------------------------- #

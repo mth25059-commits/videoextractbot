@@ -413,6 +413,36 @@ def account_card(u, jobs_done: int) -> str:
     )
 
 
+def join_gate(channels, first_name: str = "") -> str:
+    """
+    The one screen a user sees until they are in every channel.
+
+    It names the channels rather than saying "join our channels", because the
+    buttons are the only other place that information exists and a user who has
+    joined two of three needs to know which one is left.
+    """
+    who = f" {esc(first_name)}" if first_name else ""
+    lines = [
+        f"🔒 <b>One step first{who}</b>",
+        "──────────────────",
+        f"Join {'this channel' if len(channels) == 1 else 'these channels'}, "
+        f"then tap <b>✅ I've joined</b> and the bot is yours.",
+        "",
+    ]
+    lines += [f"  {n}. <a href=\"{c.link}\">{esc(c.label)}</a>"
+              for n, c in enumerate(channels, 1)]
+    lines += ["", "<i>Takes ten seconds. Nothing is charged for this.</i>"]
+    return "\n".join(lines)
+
+
+def join_still_missing(channels) -> str:
+    """The alert on ✅ when they are not in all of them yet."""
+    if len(channels) == 1:
+        return f"Not joined yet — {channels[0].label} is still open. Join it, then tap again."
+    names = ", ".join(c.label for c in channels)
+    return f"{len(channels)} still to join: {names}"
+
+
 def new_user_alert(u, total_users: int) -> str:
     return (
         "🆕 <b>New user started the bot</b>\n"

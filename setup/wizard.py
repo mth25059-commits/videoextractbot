@@ -1,22 +1,23 @@
 """
-The wizard: twelve questions, one review page, one verification pass, then start.
+The wizard: thirteen questions, one review page, one verification pass, then start.
 
 Order is the operator's, not the code's — token, admin id, UPI, payee, the bank
 alert, cookies, proxies, api_id/api_hash, the rate, the Terabox price, the other
-prices, the database. Each answer is checked before the next question is asked,
-because finding out on question twelve that the cookie from question six was a
-guest session means answering twelve questions again.
+prices, the database, the channels to force-join. Each answer is checked before the
+next question is asked, because finding out on question twelve that the cookie from
+question six was a guest session means answering twelve questions again.
 
 Four rules hold everywhere in here:
 
   * **Re-runnable.** Every question shows what is already installed as its default,
-    so `python -m setup` a month later is Enter twelve times and one changed price.
+    so `python -m setup` a month later is Enter thirteen times and one changed price.
   * **Nothing is written until the review is accepted.** Not `.env`, not the
     systemd unit. The one exception is `supabase.txt`, which has to exist before
     the question about it can be answered, and which contains no secret.
-  * **A failing answer is re-asked, never silently kept.** A dead proxy or a
-    signed-out cookie is offered for retype or dropped — writing one into `.env`
-    to be discovered later is how a bot ends up "randomly" failing.
+  * **A failing answer is re-asked, never silently kept.** A dead proxy, a
+    signed-out cookie or a channel the bot is not admin in is offered for retype or
+    dropped — writing one into `.env` to be discovered later is how a bot ends up
+    "randomly" failing.
   * **Secrets are masked on screen, in the review, and in every recap.** The only
     place a token exists in full is `.env`, mode 600.
 
@@ -38,7 +39,7 @@ from . import ask, checks, envfile, service
 from .ask import bad, hr, note, ok, say, step, title, warn
 
 ROOT = checks.ROOT
-TOTAL = 12
+TOTAL = 13
 
 #: The tree being set up. Normally the same as `ROOT`, and different exactly when
 #: `python -m setup --dir /srv/bot` is used — which is why `supabase.txt` cannot
@@ -85,6 +86,9 @@ class Answers:
 
     cookies: list[str] = field(default_factory=list)
     proxies: list[str] = field(default_factory=list)
+    #: Channels a user must be in before the bot answers. Empty is the default and
+    #: means the gate is off entirely — see `bot/joingate.py`.
+    force_join: list[str] = field(default_factory=list)
 
     credits_per_rupee: float = 1.5
     cost_terabox_per_link: float = 0.5
@@ -125,6 +129,7 @@ class Answers:
             "IMAP_SENDER": self.imap_sender,
             "PAYSVC_SECRET": self.paysvc_secret,
             "PROXIES": ",".join(self.proxies),
+            "FORCE_JOIN": ",".join(self.force_join),
             "DATABASE_URL": self.database_url,
             "FAP_API": self.fap_api,
         }
@@ -157,6 +162,8 @@ def from_env(values: dict[str, str]) -> Answers:
     a.fap_api = values.get("FAP_API", "").strip()
     a.cookies = envfile.cookies_from(values)
     a.proxies = [p.strip() for p in values.get("PROXIES", "").split(",") if p.strip()]
+    a.force_join = [c.strip() for c in values.get("FORCE_JOIN", "").split(",")
+                    if c.strip()]
     for key, attr in PRICES.items():
         raw = values.get(key, "").strip()
         if raw:
@@ -506,6 +513,66 @@ def q_database(a: Answers) -> None:
             return
 
 
+def q_force_join(a: Answers) -> None:
+    """
+    Channels a user has to be in before the bot answers them at all.
+
+    Asked last because it is the easiest question to skip — blank means the bot
+    answers everybody, which is what a fresh install wants — and because it is the
+    only one that needs something done on Telegram first.
+
+    Each channel is checked live, one at a time, and the check is stricter than it
+    looks: the bot has to be an **admin** there, not a subscriber. Telegram refuses
+    `get_chat_member` to a plain member, and the gate is deliberately fail-open so
+    that mistake cannot lock anybody out — which means it would silently let
+    everybody through while looking like it works. Here is the only place that can
+    be caught.
+    """
+    note("Force-join: the bot answers nobody until they are in your channels.\n"
+         "Blank turns it off, which is the default — the bot then answers everybody.\n\n"
+         "First, on Telegram: add this bot as an ADMIN in each channel — channel →\n"
+         "Manage → Administrators → Add Admin → your bot. Admin, not subscriber:\n"
+         "Telegram will not tell a plain member who else is in a channel.")
+    say()
+    note("Public channel:   @myupdates      (pasting https://t.me/myupdates is fine)\n"
+         "Private channel:  -1001234567890|https://t.me/+AbCdEf\n"
+         "                  Both halves. The id is what membership is checked\n"
+         "                  against; the link is what goes on the join button.\n"
+         "                  Forward any post from it to @userinfobot for the id.")
+    kept: list[str] = []
+    existing = list(a.force_join)
+    while True:
+        n = len(kept) + 1
+        default = existing[n - 1] if len(existing) >= n else ""
+        label = "Channel to force-join" if n == 1 else f"Channel {n}"
+        value = ask.ask(label, default=default, validate=ask.channel, allow_blank=True)
+        if not value:
+            break
+        say("     asking Telegram…")
+        result = checks.channel(value, a.api_id, a.api_hash, a.bot_token)
+        if result.ok:
+            ok(result.detail)
+            kept.append(value)
+        else:
+            bad(result.detail)
+            if result.hint:
+                note(result.hint)
+            note("Nothing is written yet. Fix it on Telegram in another window, then\n"
+                 "type the same thing again — it is asked afresh every time.")
+            existing = existing[:n - 1]        # do not offer the broken one again
+            if ask.ask_yes_no("try this channel again?", True):
+                continue
+        if not ask.ask_yes_no("add another channel?", False):
+            break
+    a.force_join = kept
+    if not kept:
+        note("no force-join — the bot answers everybody, which is a normal setup")
+        return
+    ok(f"{len(kept)} channel{'s' if len(kept) > 1 else ''} to join before use")
+    note("You are never gated yourself: everybody in ADMIN_IDS goes straight\n"
+         "through, so you cannot lock yourself out of your own admin panel.")
+
+
 # --------------------------------------------------------------------------- #
 # What each answer looks like on the review page
 # --------------------------------------------------------------------------- #
@@ -556,6 +623,15 @@ def _s_database(a: Answers) -> str:
     return f"postgres — {host}  (credits outlive this box)"
 
 
+def _s_force_join(a: Answers) -> str:
+    if not a.force_join:
+        return "(off — the bot answers everybody)"
+    # The id half only, for a private channel: the invite link is long, and what
+    # matters on a review page is which channels, not how to join them.
+    shown = [c.partition("|")[0] for c in a.force_join]
+    return f"{len(shown)} to join first · " + ", ".join(shown)
+
+
 @dataclass
 class Question:
     label: str
@@ -576,6 +652,7 @@ QUESTIONS: list[Question] = [
     Question("Terabox per video",    q_terabox_price, lambda a: f"{a.cost_terabox_per_link:g} credits"),
     Question("ZIP and Fap prices",   q_other_prices,  _s_zip_fap),
     Question("Where credits live",   q_database,      _s_database),
+    Question("Join these channels",  q_force_join,    _s_force_join),
 ]
 
 
@@ -605,6 +682,9 @@ def review(a: Answers) -> int | None:
         note("Top-ups are ON but confirm by hand — each 'I have paid' comes to you.")
     if not a.fap_api:
         note("The 🔥 Fap route is OFF (FAP_API is not set).")
+    if a.force_join:
+        note("Force-join is ON: nobody but you gets an answer until they are in "
+             "those channels.")
     hr()
     say()
 
@@ -656,6 +736,13 @@ def verify(a: Answers) -> bool:
         line(f"Terabox cookie {n}", checks.cookie(value, n))
     for value in a.proxies:
         line("proxy", checks.proxy(value))
+    # Not blocking, and deliberately: the gate fails open, so a channel the bot has
+    # been thrown out of costs nobody access to the bot. It does silently stop
+    # gating, though, which is why it is re-checked here rather than trusted from
+    # the answer twenty minutes ago.
+    for value in a.force_join:
+        line(f"channel {value.partition('|')[0]}",
+             checks.channel(value, a.api_id, a.api_hash, a.bot_token))
     if a.payments_on:
         line("node / paysvc deps", checks.node())
         line("paysvc", checks.paysvc("http://127.0.0.1:4400"))
@@ -710,7 +797,7 @@ def _greet(app_dir: Path, existing: bool) -> None:
         note("There is already a .env here, so every question below shows what is\n"
              "installed now. Press Enter to keep it and change only what you want.")
     else:
-        note("Twelve questions. Each answer is checked before the next one is asked,\n"
+        note("Thirteen questions. Each answer is checked before the next one is asked,\n"
              "and nothing is written until you have seen it all on one page.\n"
              "Ctrl-C at any point leaves everything exactly as it is.")
 

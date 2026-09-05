@@ -211,6 +211,10 @@ class Config:
     bot_token: str
     admin_ids: tuple[int, ...]
     log_chat_id: int | None
+    #: Channels a user has to be in before the bot answers them. Blank switches the
+    #: whole gate off, which is what a fresh clone wants — see `bot/joingate.py` for
+    #: the accepted spellings.
+    force_join: tuple[str, ...]
 
     # credits
     free_credits_on_join: float
@@ -347,6 +351,7 @@ def load() -> Config:
         bot_token=_req("BOT_TOKEN"),
         admin_ids=_ids("ADMIN_IDS"),
         log_chat_id=(_ids("LOG_CHAT_ID") or (None,))[0],
+        force_join=_list("FORCE_JOIN"),
         free_credits_on_join=_num("FREE_CREDITS_ON_JOIN", 2),
         min_topup_rupees=_int("MIN_TOPUP_RUPEES", 20),
         credits_per_rupee=per_rupee,

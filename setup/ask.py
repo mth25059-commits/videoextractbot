@@ -403,3 +403,60 @@ def hhmm(raw: str) -> str:
     if not re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", cleaned):
         raise Invalid("write it as HH:MM in 24-hour UTC, like 18:30")
     return cleaned
+
+
+def channel(raw: str) -> str:
+    """
+    One force-join channel, normalised to what `FORCE_JOIN` stores.
+
+    A public channel comes back as `@name` whichever of the three ways it was
+    written — `@name`, `name`, or a pasted `https://t.me/name` — because they are
+    the same channel and `.env` should not record which spelling the operator
+    happened to use.
+
+    A private one has no `t.me/name` at all, so it needs both halves:
+    `-1001234567890|https://t.me/+AbCdEf`. The id is the only thing membership can
+    be checked against; the invite link is the only thing that can go on a button.
+    Either alone is refused here, with the sentence that says what is missing —
+    this is the mistake everybody makes, because Telegram's "copy link" on a
+    private channel gives the half that cannot be checked.
+
+    Shape only, like everything in this module. Whether the bot is actually an
+    administrator there is `checks.channel`'s question.
+    """
+    entry = raw.strip()
+    ref, _, link = entry.partition("|")
+    ref, link = ref.strip(), link.strip()
+
+    bare = ref
+    for prefix in ("https://t.me/", "http://t.me/", "t.me/", "telegram.me/"):
+        if bare.lower().startswith(prefix):
+            bare = bare[len(prefix):]
+            break
+    bare = bare.lstrip("@").strip("/")
+
+    if bare.lstrip("-").isdigit():
+        if not link:
+            raise Invalid(
+                "that is the channel's id, and it needs its invite link too — "
+                "write both as -1001234567890|https://t.me/+AbCdEf. Without the "
+                "link there is nothing to put on the join button."
+            )
+        if not re.match(r"^(https?://)?(t\.me|telegram\.me)/", link, re.I):
+            raise Invalid("the part after the | should be the t.me invite link")
+        return f"{bare}|{link if '://' in link else 'https://' + link}"
+
+    if not bare:
+        raise Invalid("that is empty — write @yourchannel")
+    if bare.startswith("+") or bare.lower().startswith("joinchat/"):
+        raise Invalid(
+            "that is a private invite link, and membership cannot be checked "
+            "against one. Forward any post from the channel to @userinfobot to "
+            "get its id, then write both: -1001234567890|" + entry
+        )
+    if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{3,31}", bare):
+        raise Invalid(
+            "a public channel's name is 4-32 characters, letters, digits and "
+            "underscores — like @myupdates"
+        )
+    return f"@{bare}"

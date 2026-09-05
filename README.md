@@ -25,10 +25,11 @@ sudo bash install.sh
 
 `install.sh` installs the system packages (ffmpeg, Node, `unar` for RAR), builds
 the virtualenv, installs the payment service's Node packages — and then hands over
-to a wizard that asks twelve questions and **checks each answer as you give it**.
+to a wizard that asks thirteen questions and **checks each answer as you give it**.
 Every Terabox cookie is tested against Terabox before it is accepted; every proxy
-is dialled; the Telegram credentials are used to call `get_me()` for real. Nothing
-is written until you have seen it all on one review page and accepted it.
+is dialled; the Telegram credentials are used to call `get_me()` for real; every
+force-join channel is opened to confirm the bot is an admin there. Nothing is
+written until you have seen it all on one review page and accepted it.
 
 Re-run `sudo bash install.sh` any time to change an answer. Every current value is
 offered as the default, so Enter keeps it, and your old `.env` is copied to
@@ -42,6 +43,7 @@ offered as the default, so Enter keeps it, and your old `.env` is copied to
 | **Bot token** | [@BotFather](https://t.me/BotFather) → `/mybots` | required |
 | **Your Telegram id** | [@userinfobot](https://t.me/userinfobot) → `/start` | required — it is who the admin panel obeys |
 | **A Terabox `ndus` cookie** | terabox.com, signed in → F12 → Cookies | for the Terabox service |
+| **A channel of your own** | Telegram → new channel → add the bot as **admin** | only to make joining it compulsory; leave blank and the bot answers everybody |
 | **A UPI id** | any UPI app | only to sell credits; leave blank and top-ups are simply off |
 | **A Gmail app password** | Google account → Security → App passwords | only to settle payments automatically |
 | **A Supabase project** | free tier | only if you want credits to outlive this VPS |
@@ -80,6 +82,34 @@ A Terabox link that points at a **folder** is charged per video inside it, not p
 link: the floor is taken when the batch is confirmed and the rest once the folder
 has been read, so nothing is held for videos that turn out not to be there.
 `TERABOX_MAX_FILES_PER_LINK` (default 10) bounds how many one link may pull.
+
+### Join a channel first (optional)
+
+`FORCE_JOIN` is a list of channels a user has to be in before the bot answers them
+at all. Blank — the shipped default — and there is no gate: no handler, no extra API
+call, nothing. Filled in, the first thing anyone sees is one card naming the
+channels, with a button each and **✅ I've joined** under them; pressing it asks
+Telegram again then and there, and the bot opens up.
+
+```
+FORCE_JOIN=@myupdates,-1001234567890|https://t.me/+AbCdEf
+```
+
+A public channel can be written `@name`, `name`, or pasted as `https://t.me/name`.
+A private one needs both halves — the numeric id is the only thing membership can be
+checked against, the invite link the only thing that can go on a button — and the
+wizard refuses the half that cannot be checked rather than putting up a dead end.
+
+**The bot must be an administrator in every channel**, not just a member: Telegram
+refuses to say who is in a channel to anyone else. The wizard checks that at install
+time, because the gate itself deliberately does not. Three decisions worth knowing:
+
+- **A pass is cached for five minutes; a refusal is never cached.** The moment after
+  somebody joins is exactly when they press ✅.
+- **If the check fails, the user gets in.** Remove the bot from a channel and
+  `get_chat_member` fails for everyone at once — gating on that would lock out your
+  whole userbase, paying users included. It is logged loudly and the door stays open.
+- **`ADMIN_IDS` are never gated**, so you cannot lock yourself out of your own panel.
 
 ### Prices change while it runs
 
@@ -231,16 +261,16 @@ lets the queue refund every job still in flight, which is why the systemd unit i
 
 ## Tests
 
-1418 assertions, no network, no credentials. From the repo:
+1590 assertions, no network, no credentials. From the repo:
 
 ```bash
-for t in queue terabox fap archive gate phase2 config report payments db_pg setup; do .venv/bin/python tests/test_$t.py || break; done
+for t in queue terabox fap archive gate phase2 config report payments db_pg join setup; do .venv/bin/python tests/test_$t.py || break; done
 ```
 
 `test_db_pg.py` skips itself unless `DATABASE_URL` is set, so nobody needs Postgres
 installed to run the suite.
 
-Two of them exist to hold one property each, and both are easy to break by
+Three of them exist to hold one property each, and all three are easy to break by
 accident:
 
 - `test_queue.py` — **a user is never charged for a video they did not receive.**
@@ -248,6 +278,9 @@ accident:
   handler that wants private text is gated on the mode it owns
   ([_gate.py](bot/handlers/_gate.py)). Without that the first one registered
   swallows every message and the rest are dead code.
+- `test_join.py` — the force-join gate lets a user in when the check itself fails,
+  caches a yes and never a no, and never gates an admin. Each of those is one line
+  of code and each one, inverted, locks people out of a working bot.
 
 ## Layout
 
@@ -269,10 +302,12 @@ bot/
   nightly.py     the health report to the admins, at DAILY_REPORT_UTC
   broadcast.py   one message to every user, paced so Telegram does not refuse it
   state.py       parked interactions (callback data is only 64 bytes)
+  joingate.py    force-join: who is in which channel, and the pass cache
   ui.py          text, progress bars, throttling
   keyboards.py   every inline keyboard
   providers/     the plug-in slot for link sources
   handlers/      /start, Terabox, Fap, ZIP, payments, admin — gated by _gate.py
+                 join.py stands in front of them all when FORCE_JOIN is set
 paysvc/          the Node UPI gateway: QR, order journal, bank-mail settlement
 deploy/run.sh    the supervisor: pidfiles, log rotation, a stop that waits
 ```

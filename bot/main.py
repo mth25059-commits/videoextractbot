@@ -43,7 +43,8 @@ except Exception as exc:
     raise SystemExit(2) from None
 
 from . import callback_server, db, media, nightly, payments, scratch, settings
-from .handlers import admin, fap, payment, start as start_handlers, terabox, zipfiles
+from .handlers import (admin, fap, join, payment, start as start_handlers, terabox,
+                       zipfiles)
 from .queue import Queue
 
 logging.basicConfig(
@@ -100,7 +101,14 @@ def register_all(app: Client, jobs: Queue) -> None:
     The box ran `payment.register` *after* terabox, which meant the "type your own
     amount" prompt was answered by `loose_text` with "wrong link — no video found".
     It is before terabox here, which is the fix.
+
+    `join.register` is first, but for a different reason and it is not about this
+    ordering rule at all: it installs its two handlers in group **-1**, and pyrogram
+    gives every group a chance in ascending order. So the gate sees a message before
+    anything below, and its `StopPropagation` is what keeps the rest from running.
+    Everything else here shares group 0, where only the first match runs.
     """
+    join.register(app)
     start_handlers.register(app)
     admin.register(app, jobs)
     zipfiles.register(app, jobs)
