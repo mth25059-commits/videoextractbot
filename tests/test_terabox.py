@@ -1328,6 +1328,9 @@ def test_egress_rotates_and_never_lets_a_proxy_fail_a_job():
               egress.bench(None) or egress.benched(), {})
 
         # The security half. This string goes into logs and Telegram messages.
+        # The credentials below are invented and the addresses are from RFC 5737's
+        # documentation range, deliberately: a test whose whole point is "a proxy
+        # password must never be printed" is the last place to keep a live one.
         check("the password never reaches a printable string",
               egress.describe("http://wnqvtbxk:7hkzmdqfwlsp@203.0.113.7:6754"),
               "203.0.113.7:6754")
