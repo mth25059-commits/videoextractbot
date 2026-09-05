@@ -118,8 +118,9 @@ LITE = parse(db.SCHEMA)
 PG = parse(db.SCHEMA_PG)
 
 #: Columns that hold something bigger than a 32-bit signed integer, or will. Telegram
-#: ids are past 2^31 already (`6100000001` is a real one), `size_bytes` gets there on
-#: a 2 GB upload, and every `*_at` is a Unix timestamp, which runs out in 2038.
+#: ids passed 2^31 years ago — every account made since about 2021 has one — and
+#: `size_bytes` gets there on a 2 GB upload, and every `*_at` is a Unix timestamp,
+#: which runs out in 2038.
 MUST_BE_64BIT = {
     "user_id", "size_bytes", "amount_paise",
     "joined_at", "last_seen", "created_at", "finished_at", "paid_at", "expires_at",

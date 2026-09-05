@@ -485,10 +485,9 @@ def test_the_whole_route_from_key_to_video():
     ffmpeg/Telegram — so the money path, the token handover and the panel reuse are
     the real code.
 
-    It exists because the resolver is down. When `resolver.example` answers again
-    the only thing that changes is where `SAMPLE` comes from, and this proves the
-    rest of the chain was already right rather than finding out one paid credit at a
-    time.
+    It exists because the resolver is down. When the resolver answers again the only
+    thing that changes is where `SAMPLE` comes from, and this proves the rest of the
+    chain was already right rather than finding out one paid credit at a time.
     """
     import asyncio                                       # noqa: PLC0415
     import shutil as _shutil                             # noqa: PLC0415

@@ -256,7 +256,7 @@ def test_batch_charges_whoever_pressed_the_button():
     conn.commit()
     db._conn = conn
 
-    USER, BOT = 6100000001, 7200000002          # the human, and @videoextractkro_bot
+    USER, BOT = 6100000001, 7200000002          # the human, and the bot itself
     credits.ensure(USER, "the operator", "operator")
     opening = credits.balance(USER)
 
@@ -1817,25 +1817,38 @@ def test_one_panel_from_prompt_to_video():
     # difference is only whether the key has somewhere to hand the next message.
     from bot.handlers import fap as fap_handler              # noqa: PLC0415
 
-    for name, label, want, where, after in (
-            ("Fap", kb.KEY_FAP, "Send me the video link", "got_links", fap_handler.MODE),
-            ("File", kb.KEY_FILE, "ZIP, RAR or 7z", "got_links", None),
-            ("Fap", kb.KEY_FAP, "Send me the video link", "loose_text", fap_handler.MODE),
-            ("File", kb.KEY_FILE, "ZIP, RAR or 7z", "loose_text", None)):
-        state.set_mode(USER, handler.MODE, panel=panel.id, chat=USER)
-        pressed = Msg(label, USER)
-        asyncio.run(app.handlers[where](client, pressed))
-        answer = pressed.replies[-1]
-        check(f"{name} in {where} says its own thing", want in answer.text, True)
-        check(f"{name} in {where} is not called a wrong link",
-              "Wrong link" in answer.text, False)
-        check(f"{name} in {where} is not the inline menu",
-              [d for d in answer.buttons() if d == "mode:terabox"], [])
-        check(f"{name} in {where} takes the press out of the chat",
-              pressed.deleted, True)
-        left = state.get_mode(USER)
-        check(f"{name} in {where} leaves the Terabox flow behind",
-              left[0] if left else None, after)
+    # 🔥 Fap only has somewhere to hand over *to* when a resolver is configured, and
+    # `fap_api` is empty by default — deliberately, since there is no shared endpoint
+    # and a default here would point every install at one server. What is under test
+    # is the handover, not the default, so it is set for these four presses and put
+    # back afterwards. With it blank the key answers "not switched on yet" and keeps
+    # the mode it was in, which is the other route and is covered in test_fap.py.
+    real_fap_api = cfg.fap_api
+    object.__setattr__(cfg, "fap_api", "https://resolver.example/api/faphouse/mrx")
+    try:
+        for name, label, want, where, after in (
+                ("Fap", kb.KEY_FAP, "Send me the video link", "got_links",
+                 fap_handler.MODE),
+                ("File", kb.KEY_FILE, "ZIP, RAR or 7z", "got_links", None),
+                ("Fap", kb.KEY_FAP, "Send me the video link", "loose_text",
+                 fap_handler.MODE),
+                ("File", kb.KEY_FILE, "ZIP, RAR or 7z", "loose_text", None)):
+            state.set_mode(USER, handler.MODE, panel=panel.id, chat=USER)
+            pressed = Msg(label, USER)
+            asyncio.run(app.handlers[where](client, pressed))
+            answer = pressed.replies[-1]
+            check(f"{name} in {where} says its own thing", want in answer.text, True)
+            check(f"{name} in {where} is not called a wrong link",
+                  "Wrong link" in answer.text, False)
+            check(f"{name} in {where} is not the inline menu",
+                  [d for d in answer.buttons() if d == "mode:terabox"], [])
+            check(f"{name} in {where} takes the press out of the chat",
+                  pressed.deleted, True)
+            left = state.get_mode(USER)
+            check(f"{name} in {where} leaves the Terabox flow behind",
+                  left[0] if left else None, after)
+    finally:
+        object.__setattr__(cfg, "fap_api", real_fap_api)
 
     menu_key = Msg(kb.KEY_MENU, USER)
     asyncio.run(app.handlers["loose_text"](client, menu_key))

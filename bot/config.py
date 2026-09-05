@@ -294,12 +294,12 @@ class Config:
     # midnight IST is 18:30 UTC. Set it to an empty string to send no report.
     daily_report_utc: str = "18:30"
 
-    # fap: the operator's own resolver, which turns one video page into a list of
-    # HLS renditions. Fixed in the source because it is the operator's service and
-    # not a per-install setting — `FAP_API` exists so a moved endpoint is one line
-    # of `.env` rather than a redeploy. Emptying it turns the 🔥 key into a polite
-    # "not switched on" and charges nobody.
-    fap_api: str = "https://resolver.example/api/faphouse/mrx"
+    # fap: a resolver of your own, which turns one video page into a list of HLS
+    # renditions. Blank by default and deliberately so — there is no shared endpoint
+    # to point at, and a default here would send every install's links to whichever
+    # server happened to be written down. Empty turns the 🔥 key into a polite "not
+    # switched on" that charges nobody, which is the right state until you run one.
+    fap_api: str = ""
 
     # The priced ladder, one entry per rung the menu offers. Only the rungs a video
     # actually has are shown, so these are prices and not promises. Halves are the
@@ -373,8 +373,7 @@ def load() -> Config:
         terabox_fallback_attempts=_int("TERABOX_FALLBACK_ATTEMPTS", 4),
         proxies=_list("PROXIES"),
         daily_report_utc=os.environ.get("DAILY_REPORT_UTC", "18:30").strip(),
-        fap_api=os.environ.get(
-            "FAP_API", "https://resolver.example/api/faphouse/mrx").strip(),
+        fap_api=os.environ.get("FAP_API", "").strip(),
         cost_fap_480=_num("COST_FAP_480", 1),
         cost_fap_720=_num("COST_FAP_720", 1.5),
         cost_fap_1080=_num("COST_FAP_1080", 2),
