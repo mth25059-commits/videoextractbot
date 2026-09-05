@@ -133,11 +133,42 @@ def topup_presets() -> Markup:
     return Markup(rows)
 
 
-def payment_screen(order_id: str, upi_uri: str) -> Markup:
+def payment_screen(order_id: str, auto_confirm: bool = True) -> Markup:
+    """
+    The buttons under the QR.
+
+    There is deliberately no "open in UPI app" button. Telegram only allows
+    http/https/tg: in an inline button's URL, so a `upi://pay?…` link there is
+    rejected outright (BUTTON_URL_INVALID) and the whole screen fails to send.
+    The UPI id and the exact amount go in tap-to-copy <code> blocks instead,
+    which also works for someone paying from a second device.
+    """
+    check = ("✅  I have paid — please check" if auto_confirm
+             else "✅  I have paid — tell the admin")
     return Markup([
-        [Btn("📲  Open in UPI app", url=upi_uri)],
-        [Btn("✅  I have paid — please check", callback_data=f"pay:check:{order_id}")],
+        [Btn(check, callback_data=f"pay:check:{order_id}")],
         [Btn("✖  Cancel order", callback_data=f"pay:cancel:{order_id}")],
+    ])
+
+
+def payment_pending(order_id: str) -> Markup:
+    """Shown when a check found nothing yet — the same screen, minus the noise."""
+    return Markup([
+        [Btn("🔄  Check again", callback_data=f"pay:check:{order_id}")],
+        [Btn("✖  Cancel order", callback_data=f"pay:cancel:{order_id}")],
+    ])
+
+
+def admin_confirm_payment(order_id: str) -> Markup:
+    """
+    Only reachable by an admin, and only while automatic confirmation is off.
+
+    Without IMAP configured nothing can settle an order on its own, so the
+    alternative to this button is a user who has paid and can never be credited.
+    """
+    return Markup([
+        [Btn("✅  Confirm & add credits", callback_data=f"adm:paid:{order_id}")],
+        [Btn("🚫  Not received", callback_data=f"adm:unpaid:{order_id}")],
     ])
 
 

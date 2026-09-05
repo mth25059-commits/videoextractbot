@@ -1,0 +1,18 @@
+{
+  "name": "terabot-paysvc",
+  "version": "1.0.0",
+  "private": true,
+  "description": "UPI top-ups for TeraBot: quotes each order a unique amount, watches the bank's alert mail, and tells the bot when money lands. Binds to 127.0.0.1 only.",
+  "type": "module",
+  "main": "server.js",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "start": "node server.js",
+    "test": "node test/store.test.js && node test/alert.test.js"
+  },
+  "dependencies": {
+    "upi-fampay-gateway": "github:mth25059-commits/upi-fampay-gateway#main"
+  }
+}

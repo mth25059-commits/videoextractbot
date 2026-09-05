@@ -1,0 +1,27 @@
+[Unit]
+# Boot persistence for a box where deploy/run.sh is the supervisor.
+#
+# The repo's own deploy/terabot.service runs the bot alone under a dedicated
+# system user; this box runs bot *and* paysvc as `ubuntu` under run.sh, which
+# already restarts either one if it dies. So systemd's job here is narrow: bring
+# that supervisor up after a reboot, and take it down politely on shutdown.
+#
+# ExecStop is not cosmetic. run.sh stop signals the process group and waits, and
+# that wait is what lets the queue refund every job still in flight — killing the
+# bot outright is how a user pays for a video that never arrives.
+Description=TeraBot supervisor (deploy/run.sh)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/opt/terabot
+ExecStart=/usr/bin/bash /opt/terabot/deploy/run.sh start
+ExecStop=/usr/bin/bash /opt/terabot/deploy/run.sh stop
+TimeoutStopSec=90
+
+[Install]
+WantedBy=multi-user.target

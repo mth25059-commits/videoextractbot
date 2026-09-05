@@ -143,13 +143,26 @@ def grant(user_id: int, amount: float, reason: str, ref: str | None = None,
           is_topup: bool = False) -> float:
     """Admin gift or a settled payment. `is_topup` counts it toward total_topup."""
     with db.transaction() as conn:
-        new_balance = _move(conn, user_id, abs(amount), reason, ref)
-        if is_topup:
-            conn.execute(
-                "UPDATE users SET total_topup = total_topup + ? WHERE user_id = ?",
-                (abs(amount), user_id),
-            )
-        return new_balance
+        return grant_in(conn, user_id, amount, reason, ref, is_topup)
+
+
+def grant_in(conn, user_id: int, amount: float, reason: str, ref: str | None = None,
+             is_topup: bool = False) -> float:
+    """
+    `grant`, but inside a transaction the caller already opened.
+
+    A top-up has to mark the order paid and add the credits atomically — if those
+    were two transactions, a crash between them either pays for nothing or credits
+    twice. SQLite has no nested BEGIN, so the caller owns the transaction and
+    passes its connection in here.
+    """
+    new_balance = _move(conn, user_id, abs(amount), reason, ref)
+    if is_topup:
+        conn.execute(
+            "UPDATE users SET total_topup = total_topup + ? WHERE user_id = ?",
+            (abs(amount), user_id),
+        )
+    return new_balance
 
 
 def can_afford(user_id: int, amount: float) -> bool:

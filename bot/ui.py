@@ -429,3 +429,133 @@ def insufficient(needed: float, have: float) -> str:
         f"Short by <b>{needed - have:g}</b>.\n\n"
         "Tap below to top up."
     )
+
+
+# --- top-ups ----------------------------------------------------------------
+# The payment screens, folded in from the deployed box. They used to live on a
+# branch of their own; from here there is one tree, so this is the only copy.
+
+def topup_intro(balance: float, floor: int, per_credit: float) -> str:
+    """
+    The Add Credit screen.
+
+    The rate goes through `rate_text`, not an f-string of its own. `per_credit`
+    is rupees-per-credit, so at 1.5 credits per rupee it is 0.6667 and printing
+    it directly reads "₹0.6667 = 1 credit" — which is true, unusable, and gets
+    reported as a pricing bug. `rate_text` turns it back up the right way.
+    """
+    return (
+        "💳 <b>Add Credit</b>\n"
+        "──────────────────\n"
+        f"💰 Balance now: <b>{balance:g} credits</b>\n"
+        f"💱 Rate: {rate_text(per_credit)}\n"
+        f"🔖 Minimum: <b>₹{floor:g}</b> · no maximum\n"
+        "\n"
+        "Pick an amount, or type your own 👇"
+    )
+
+
+def topup_ask_amount(floor: int) -> str:
+    return (
+        "✏️ <b>How much do you want to add?</b>\n\n"
+        f"Send me the amount in rupees — minimum <b>₹{floor:g}</b>.\n"
+        f"<i>Just the number, like</i> <code>{floor * 3}</code>"
+    )
+
+
+def topup_bad_amount(reason: str, floor: int) -> str:
+    return (
+        f"❌ {esc(reason)}\n\n"
+        f"Send the amount in rupees — a whole number, at least <b>₹{floor:g}</b>."
+    )
+
+
+def payment_card(q, *, qr: bool = True, minutes: int = 10) -> str:
+    """
+    The pay screen. Caption of the QR photo, so it stays well under 1024 chars.
+
+    The exact-amount warning is not decoration. Each live order is quoted a
+    different figure a few paise below the listed price, and that figure is what
+    identifies the payment — a user who rounds up to ₹20 has paid an amount that
+    matches nothing, and someone has to sort it out by hand.
+    """
+    how = ("📲 Scan the QR with GPay / PhonePe / Paytm — any UPI app."
+           if qr else "📲 Open any UPI app and pay to the ID below.")
+    lines = [
+        f"💳 <b>Pay ₹{q.amount_rupees:.2f}</b>",
+        "──────────────────",
+        how,
+        "",
+        f"💸 Amount   <code>{q.amount_rupees:.2f}</code>",
+        f"🏦 UPI ID   <code>{esc(q.upi_id)}</code>",
+    ]
+    if q.payee:
+        lines.append(f"👤 Payee     {esc(q.payee)}")
+    lines.append("")
+    lines.append(
+        f"⚠️ <b>Pay exactly ₹{q.amount_rupees:.2f}</b>"
+        + (f", not ₹{q.rupees:g}" if q.discount_paise else "")
+        + f" — that exact figure is how I recognise your payment. "
+          f"You still get <b>{q.credits:g} credits</b>."
+    )
+    lines.append("")
+    lines.append(f"⏳ Valid for <b>{minutes} minutes</b>")
+    if q.reference:
+        lines.append(f"🧾 Ref <code>{esc(q.reference)}</code>")
+    lines.append("")
+    lines.append(
+        "✅ Credits land on their own, usually within a minute. "
+        "Tap below if you don't want to wait."
+        if q.auto_confirm else
+        "📩 Tap the button below after paying — the admin confirms these by hand "
+        "at the moment, so it may take a few minutes."
+    )
+    return "\n".join(lines)
+
+
+def payment_claim(row, user) -> str:
+    """
+    Admin-facing: "this user says they have paid." Sent with a confirm button.
+
+    Everything here comes from the order row rather than from the user, so the
+    amount an admin is about to approve is the amount the bot quoted.
+    """
+    paise = int(row["amount_paise"] or 0)
+    return (
+        "💰 <b>Payment claim</b>\n"
+        "──────────────────\n"
+        f"👤 {esc(getattr(user, 'first_name', '') or 'user')} "
+        f"{esc(getattr(user, 'handle', ''))}\n"
+        f"🆔 <code>{row['user_id']}</code>\n"
+        "\n"
+        f"💸 Expected  <b>₹{paise / 100:.2f}</b>"
+        + (f"  <i>(listed ₹{float(row['rupees']):g})</i>\n" if paise else "\n")
+        + f"🎁 Credits   {float(row['credits']):g}\n"
+        + (f"🧾 Ref <code>{esc(row['reference'])}</code>\n" if row["reference"] else "")
+        + f"📄 Order <code>{esc(row['order_id'])}</code>\n"
+        "\n"
+        "<i>Check the bank app for that exact amount before confirming.</i>"
+    )
+
+
+def payment_not_yet(minutes_left: int, auto_confirm: bool) -> str:
+    when = (f"⏳ This order is valid for <b>{minutes_left} more minute"
+            f"{'s' if minutes_left != 1 else ''}</b>.\n" if minutes_left else "")
+    tail = ("I check the bank inbox every few seconds — if you have just paid, "
+            "give it a minute and tap again."
+            if auto_confirm else
+            "The admin has been told. You will get the credits as soon as it is "
+            "confirmed — no need to pay again.")
+    return f"🔍 <b>Not showing as paid yet</b>\n\n{when}\n{tail}"
+
+
+def payment_paid(s) -> str:
+    return (
+        "🎉 <b>Payment received!</b>\n"
+        "──────────────────\n"
+        f"💸 Paid        ₹{s.amount_paise / 100:.2f}\n"
+        f"🎁 Added       <b>+{s.credits_added:g} credits</b>\n"
+        f"💰 Balance     <b>{s.new_balance:g} credits</b>\n"
+        + (f"🧾 Bank ref    <code>{esc(s.bank_ref)}</code>\n" if s.bank_ref else "")
+        + "\nThank you! Pick a service below 👇"
+    )

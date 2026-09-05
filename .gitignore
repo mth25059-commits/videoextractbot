@@ -6,9 +6,19 @@
 paysvc/data/
 data/
 
+# The wizard's own scratch files. `fampay.txt` is a raw bank alert mail — it
+# carries an account holder's name, an amount and a UTR; `supabase.txt` is a
+# database connection string. Both are pasted in during setup and neither is
+# ever meant to leave the box.
+fampay.txt
+supabase.txt
+env-before-*.bak
+
 # ---- runtime ----
 downloads/
 tmp/
+run/
+logs/
 *.db
 *.db-wal
 *.db-shm

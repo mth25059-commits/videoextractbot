@@ -16,7 +16,14 @@ ROOT = Path(__file__).resolve().parent.parent
 
 
 def _load_dotenv(path: Path) -> None:
-    """Minimal .env reader. No dependency, and it will not clobber real env vars."""
+    """
+    Minimal .env reader. No dependency, and it will not clobber real env vars.
+
+    A ` #` after a value ends it. Without that, `IMAP_APP_PASSWORD=   # not yet`
+    reads as the *string* "# not yet" — which looks set, so the bot would promise
+    credits that confirm themselves while no inbox is actually being watched.
+    A `#` with no space before it is kept, because passwords contain them.
+    """
     if not path.exists():
         return
     for raw in path.read_text(encoding="utf-8").splitlines():
@@ -25,6 +32,13 @@ def _load_dotenv(path: Path) -> None:
             continue
         key, _, value = line.partition("=")
         key = key.strip()
+        # Before trimming: once the leading spaces are gone, `KEY=   # note` looks
+        # like a value that simply begins with '#'.
+        if not value.lstrip()[:1] in ('"', "'"):
+            for i in range(len(value)):
+                if value[i] == "#" and (i == 0 or value[i - 1].isspace()):
+                    value = value[:i]
+                    break
         value = value.strip().strip('"').strip("'")
         os.environ.setdefault(key, value)
 
@@ -43,6 +57,23 @@ def _req(name: str) -> str:
             f"{name} is not set. Copy .env.example to .env and fill it in."
         )
     return value
+
+
+def _req_int(name: str) -> int:
+    """
+    Required, and a number. `int(_req(name))` would do the job right up until
+    someone pastes `API_ID=1234 5678` out of my.telegram.org, and then the bot
+    dies on a bare ValueError that names neither the variable nor the file it
+    came from. This is the likeliest mistake anyone makes on a fresh box.
+    """
+    raw = _req(name)
+    try:
+        return int(raw)
+    except ValueError as exc:
+        raise ConfigError(
+            f"{name} must be a whole number, got {raw!r} — check .env for a "
+            f"stray space, quote or letter."
+        ) from exc
 
 
 def _int(name: str, default: int) -> int:
@@ -288,7 +319,7 @@ def load() -> Config:
     per_rupee, per_credit = _rate()
 
     cfg = Config(
-        api_id=int(_req("API_ID")),
+        api_id=_req_int("API_ID"),
         api_hash=_req("API_HASH"),
         bot_token=_req("BOT_TOKEN"),
         admin_ids=_ids("ADMIN_IDS"),

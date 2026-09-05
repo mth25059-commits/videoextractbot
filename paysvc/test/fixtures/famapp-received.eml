@@ -1,0 +1,34 @@
+Delivered-To: someone@example.com
+Authentication-Results: mx.google.com;
+       dkim=pass header.i=@famapp.in header.s=XXXXXXXXXXXXXXXX header.b=XXXXXXXX;
+       dkim=pass header.i=@amazonses.com header.s=XXXXXXXXXXXXXXXX header.b="XXXXXXXX";
+       spf=pass (google.com: domain of 000000000000-0000-0000-0000-000000000000-000000@ap-south-1.amazonses.com designates 76.223.180.109 as permitted sender) smtp.mailfrom=000000000000-0000-0000-0000-000000000000-000000@ap-south-1.amazonses.com;
+       dmarc=pass (p=REJECT sp=REJECT dis=NONE) header.from=famapp.in
+Date: Wed, 2 Sep 2026 09:40:42 +0000
+From: FamApp <no-reply@famapp.in>
+To: someone@example.com
+Subject: =?UTF-8?Q?You_received_=E2=82=B91.06_in_your_FamX_account?=
+MIME-Version: 1.0
+Content-Type: multipart/alternative;
+	boundary="----=_Part_000000_0000000000.0000000000000"
+Message-ID: <000000000000-0000-0000-0000-000000000000-000000@ap-south-1.amazonses.com>
+X-SES-Outgoing: 2026.09.02-76.223.180.109
+
+------=_Part_000000_0000000000.0000000000000
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: quoted-printable
+
+Hey Account Holder, You have successfully received =E2=82=B91.06 from A PAY=
+ER at 03:10 PM IST, 02 September 2026 with transaction id FMPIB0000000000.=
+ Your updated balance is =E2=82=B999.99. UTR: 999999999999. Purpose: SF2026=
+0902XXXXXX. If this was not done by you, report this transaction at support=
+@famapp.in
+------=_Part_000000_0000000000.0000000000000
+Content-Type: text/html; charset=UTF-8
+Content-Transfer-Encoding: quoted-printable
+
+<!DOCTYPE html><html><body><h1>Hey <span>Account Holder</span>,</h1><p>You h=
+ave successfully received</p><h2>=E2=82=B91.06</h2><p>from <span>A PAYER</sp=
+an></p><table><tr><td>Updated Balance :</td><td>=E2=82=B999.99</td></tr><tr>=
+<td>UTR :</td><td>999999999999</td></tr></table></body></html>
+------=_Part_000000_0000000000.0000000000000--

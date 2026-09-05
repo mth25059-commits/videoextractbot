@@ -1,0 +1,20 @@
+# Line endings, decided here rather than by whoever clones.
+#
+# This repo is edited on Windows and runs on Linux. `core.autocrlf=true` on the
+# editing machine happens to store LF today, but it is a per-machine setting and
+# the next contributor's may differ — and a shell script that reaches a VPS with
+# CRLF fails as `bash: $'\r': command not found`, which names neither the file
+# nor the reason. So the files that a shell, systemd or Node has to execute are
+# pinned to LF in the repo *and* in every working tree.
+*.sh            text eol=lf
+*.service       text eol=lf
+*.py            text eol=lf
+*.js            text eol=lf
+*.json          text eol=lf
+.env.example    text eol=lf
+
+# The mail fixture is normalised like everything else, deliberately. RFC 5322 is
+# CRLF and a real DKIM signature is computed over it — but this fixture's `b=` is
+# scrubbed to XXXX, so nothing verifies it cryptographically and the parser reads
+# either form. Checked: `paysvc/test/alert.test.js` passes against the LF copy.
+*.eml           text eol=lf
