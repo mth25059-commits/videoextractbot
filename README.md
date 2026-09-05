@@ -16,7 +16,7 @@ bots of this kind only ever send you a link instead of the video.
 On a fresh Ubuntu 24.04 box, two commands. Everything else is asked, not edited.
 
 ```bash
-git clone https://github.com/<you>/videoextractbot.git && cd videoextractbot
+git clone https://github.com/mth25059-commits/videoextractbot.git && cd videoextractbot
 ```
 
 ```bash
