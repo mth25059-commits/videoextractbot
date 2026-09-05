@@ -256,6 +256,16 @@ class Config:
     show_soon_button: bool = False
     soon_button_label: str = "🔥  Fap"
 
+    # How long a delivered video is left in the chat before the bot deletes it, on
+    # every route — Terabox, ZIP and Fap alike. `0` turns the whole thing off and
+    # nothing is ever deleted.
+    #
+    # The user is told, in the progress panel, before the file lands: a video that
+    # vanishes with no warning reads as the bot losing it. The timer itself lives in
+    # the `deletions` table rather than in a sleeping task, so a restart in the middle
+    # of the half-hour still honours it.
+    auto_delete_minutes: int = 30
+
     # terabox: the operator's own logged-in cookie. Anonymous listing works, but
     # only a signed-in session is given a download link, so without either this or
     # the fallback below the service says so instead of charging.
@@ -312,7 +322,7 @@ class Config:
     cost_fap_720: float = 1.5
     cost_fap_1080: float = 2.0
 
-    # Where the five tables live. Empty is the normal case: one SQLite file under
+    # Where the six tables live. Empty is the normal case: one SQLite file under
     # `data/`, on this box, gone when this box is. A Postgres URL here — in practice
     # Supabase's *pooler* string, port 6543, because a VPS behind NAT cannot hold a
     # direct 5432 session open — puts users, credits, the ledger and the job history
@@ -370,6 +380,7 @@ def load() -> Config:
         payment_window_minutes=_int("PAYMENT_WINDOW_MINUTES", 10),
         show_soon_button=_bool("SHOW_SOON_BUTTON", False),
         soon_button_label=os.environ.get("SOON_BUTTON_LABEL", "🔥  Fap").strip() or "🔥  Fap",
+        auto_delete_minutes=max(0, _int("AUTO_DELETE_MINUTES", 30)),
         terabox_cookie=os.environ.get("TERABOX_COOKIE", "").strip(),
         terabox_cookies=_cookies(),
         terabox_max_files_per_link=_int("TERABOX_MAX_FILES_PER_LINK", 10),

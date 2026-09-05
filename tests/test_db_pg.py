@@ -125,6 +125,14 @@ MUST_BE_64BIT = {
     "user_id", "size_bytes", "amount_paise",
     "joined_at", "last_seen", "created_at", "finished_at", "paid_at", "expires_at",
     "updated_at",
+    # `deletions`: a chat id is a Telegram id and has the same range as a user id
+    # (a channel's is `-100` followed by ten digits); `job_id` points at
+    # `jobs.id`, which is a BIGSERIAL over there; `due_at` is another Unix timestamp.
+    #
+    # `deletions.message_id` is deliberately *not* in here. A message id is a
+    # per-chat counter in the millions and will not see 2^31 — and this set is only
+    # worth having while it means what it says.
+    "chat_id", "job_id", "due_at",
 }
 
 #: Columns the code writes 0 and 1 into and then asks `WHERE banned = 0` about. A
@@ -372,7 +380,7 @@ def part_c_the_postgres_path():
     print("\n— C3. what the wizard asks a fresh project —")
     fake = with_fake([{"table_name": "users"}, {"table_name": "ledger"}])
     check("`missing_tables` names the ones that are not there",
-          db.missing_tables(fake), ["jobs", "orders", "settings"])
+          db.missing_tables(fake), ["jobs", "orders", "settings", "deletions"])
     fake = with_fake([{"table_name": name} for name in db.TABLES])
     check("and says nothing when the schema has been pasted in",
           db.missing_tables(fake), [])

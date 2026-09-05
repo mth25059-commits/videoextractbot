@@ -17,7 +17,7 @@ import time
 from pyrogram import Client, filters
 from pyrogram.types import CallbackQuery, Message
 
-from .. import (broadcast, credits, db, egress, keyboards as kb, nightly,
+from .. import (broadcast, credits, db, egress, expiry, keyboards as kb, nightly,
                 queue as jobq, scratch, settings, state, ui)
 from ..config import cfg
 from ..providers import terabox as tb
@@ -67,6 +67,13 @@ def _vps_card() -> str:
     lines.append(f"🗂 Scratch    {ui.human_bytes(held['bytes'])} in {held['dirs']} job dir"
                  f"{'s' if held['dirs'] != 1 else ''}"
                  + (f" · <b>{held['orphans']} orphaned</b>" if held["orphans"] else ""))
+
+    if expiry.enabled():
+        # Only worth a line while the feature is on: at AUTO_DELETE_MINUTES=0 there is
+        # no clock and a permanent "0 messages" row is noise on a card read at a glance.
+        waiting = expiry.pending()
+        lines.append(f"🧹 Expiring   {expiry.minutes()} min · {waiting} message"
+                     f"{'s' if waiting != 1 else ''} on the clock")
 
     lines.append(f"⏱ Uptime     {ui.human_time(time.monotonic() - _BOOTED)}")
     return "\n".join(lines)

@@ -1,9 +1,9 @@
 """
-Storage — five tables, and two ways to hold them.
+Storage — six tables, and two ways to hold them.
 
 By default that is one SQLite file with WAL on, so the bot and the payment
 callback can both write without locking each other out. Set `DATABASE_URL` and the
-same five tables live in Postgres instead — which in practice means Supabase, and
+same six tables live in Postgres instead — which in practice means Supabase, and
 which exists for exactly one reason: a VPS is rented, and credits people paid for
 should not end when the rental does.
 
@@ -18,7 +18,7 @@ The three places the two genuinely differ:
 
   * **Placeholders.** SQLite writes `?`, Postgres writes `%s`. Every SQL string in
     this bot is written `?` and rewritten on the way out — see `_pg_sql`.
-  * **Types.** `SCHEMA` and `SCHEMA_PG` are the same five tables twice, because
+  * **Types.** `SCHEMA` and `SCHEMA_PG` are the same six tables twice, because
     Postgres's `REAL` is *single* precision (credits need double) and its `INTEGER`
     is 32-bit — a Telegram id is bigger than that, and so is a 2 GB file. They have
     to be kept in step by hand, so `tests/test_db_pg.py` compares them column by
@@ -42,6 +42,13 @@ is fine.
 `settings` is the one table nothing else in here writes: it holds prices the admin
 has changed since install, and `settings.py` is the only reader. See that module
 for why a price cannot live in `cfg`.
+
+`deletions` is the sixth and newest: one row per message that is due to be deleted
+from a user's chat, written the moment a video is delivered and drained by
+`expiry.janitor`. It is in the database rather than in a `asyncio.sleep(1800)` task
+because a restart during those thirty minutes would otherwise leave the video in
+the chat for ever — the promise on screen is that it goes, so the timer has to
+survive the process that made it.
 """
 
 from __future__ import annotations
@@ -68,7 +75,7 @@ Row = Mapping[str, Any]
 #: Every table `connect()` guarantees. The setup wizard checks this list against a
 #: Supabase project before it accepts the connection string, so it is a list and
 #: not a comment.
-TABLES = ("users", "ledger", "jobs", "orders", "settings")
+TABLES = ("users", "ledger", "jobs", "orders", "settings", "deletions")
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
@@ -134,9 +141,19 @@ CREATE TABLE IF NOT EXISTS settings (
     value      TEXT NOT NULL,
     updated_at INTEGER NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS deletions (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    chat_id     INTEGER NOT NULL,
+    message_id  INTEGER NOT NULL,
+    job_id      INTEGER,
+    due_at      INTEGER NOT NULL,
+    created_at  INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_deletions_due ON deletions(due_at);
 """
 
-#: The same five tables for Postgres. Three type changes, and every one of them is
+#: The same six tables for Postgres. Three type changes, and every one of them is
 #: a bug that would only show up in production:
 #:
 #:   * `INTEGER` -> `BIGINT` for ids, byte counts and timestamps. Postgres's
@@ -215,6 +232,16 @@ CREATE TABLE IF NOT EXISTS settings (
     value      TEXT NOT NULL,
     updated_at BIGINT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS deletions (
+    id          BIGSERIAL PRIMARY KEY,
+    chat_id     BIGINT NOT NULL,
+    message_id  INTEGER NOT NULL,
+    job_id      BIGINT,
+    due_at      BIGINT NOT NULL,
+    created_at  BIGINT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_deletions_due ON deletions(due_at);
 """
 
 def _sqlite(conn: Any) -> bool:

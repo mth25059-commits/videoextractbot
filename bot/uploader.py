@@ -57,6 +57,17 @@ class Sent:
     size_bytes: int
     seconds: float
     parts: int = 1
+    #: Every message this delivery put in the chat, oldest first — the video itself,
+    #: or all the `.001`/`.002` pieces plus the rejoin note that explains them.
+    #:
+    #: `message` is only ever the *last* of them, which was enough while nothing had to
+    #: be taken back. `expiry.remember` has to delete the whole delivery, and a
+    #: three-part video whose first two pieces stay in the chat for ever is worse than
+    #: no auto-delete at all: the user is left with fragments they cannot rejoin.
+    #:
+    #: Defaults to empty so the suites' hand-built `Sent(message=None, …)` fakes keep
+    #: working; `expiry.remember` falls back to `message.id` when it is.
+    message_ids: tuple[int, ...] = ()
 
     @property
     def speed(self) -> float:
@@ -105,6 +116,21 @@ def rejoin_note(name: str, parts: int) -> str:
 
 
 
+def _ids_of(*messages: Message | None) -> tuple[int, ...]:
+    """The message ids of whatever actually got sent, skipping anything that did not.
+
+    Tolerant of `None` and of a stub with no `id` because the suites hand this module
+    fakes, and a missing id has to mean "nothing to delete later" rather than an
+    `AttributeError` in the middle of a delivery that already succeeded.
+    """
+    out = []
+    for message in messages:
+        ident = getattr(message, "id", None)
+        if isinstance(ident, int):
+            out.append(ident)
+    return tuple(out)
+
+
 def _progress_reporter(status: Message | None, title: str, started: float, stage: str,
                        cancelled: Callable[[], bool] | None):
     """Build the callback Pyrogram calls on every uploaded chunk."""
@@ -118,7 +144,8 @@ def _progress_reporter(status: Message | None, title: str, started: float, stage
         try:
             await status.edit_text(
                 ui.progress_block(f"📤 Uploading — {ui.esc(title)}",
-                                  current, total, started, stage=stage)
+                                  current, total, started, stage=stage,
+                                  expires_minutes=cfg.auto_delete_minutes)
             )
         except FloodWait:
             # Back off instead of dying: the upload itself is still healthy.
@@ -186,7 +213,8 @@ async def send_video(
         if thumb_path:
             thumb_path.unlink(missing_ok=True)
 
-    return Sent(message=message, size_bytes=size, seconds=time.monotonic() - started)
+    return Sent(message=message, size_bytes=size, seconds=time.monotonic() - started,
+                message_ids=_ids_of(message))
 
 async def send_as_document(
     client: Client,
@@ -218,7 +246,8 @@ async def send_as_document(
         progress=_progress_reporter(status, title or path.name, started,
                                     "sending as file", cancelled),
     )
-    return Sent(message=message, size_bytes=size, seconds=time.monotonic() - started)
+    return Sent(message=message, size_bytes=size, seconds=time.monotonic() - started,
+                message_ids=_ids_of(message))
 
 
 #: Copy buffer for cutting parts. Small enough that a cancel is noticed quickly.
@@ -267,11 +296,13 @@ async def send_in_parts(
     label = title or path.name
 
     try:
-        await client.send_message(chat_id, rejoin_note(path.name, total))
+        note = await client.send_message(chat_id, rejoin_note(path.name, total))
     except Exception:
+        note = None
         log.debug("rejoin note failed", exc_info=True)   # never fatal, it is a caption
 
     last: Message | None = None
+    pieces: list[Message | None] = [note]
     index = 0
     with path.open("rb") as src:
         while True:
@@ -302,13 +333,18 @@ async def send_in_parts(
                 )
             finally:
                 part.unlink(missing_ok=True)
+            pieces.append(last)
             if written < limit:
                 break
 
     if last is None:                                      # a zero-byte file
         raise TooLarge(size, limit)
     return Sent(message=last, size_bytes=size,
-                seconds=time.monotonic() - started, parts=index)
+                seconds=time.monotonic() - started, parts=index,
+                # The rejoin note goes with them. It is instructions for files that
+                # will not exist any more, and leaving it behind is a message telling
+                # the user to join pieces that are gone.
+                message_ids=_ids_of(*pieces))
 
 
 async def send_best_effort(

@@ -55,6 +55,30 @@ def human_speed(bytes_per_sec: float) -> str:
     return f"{human_bytes(bytes_per_sec)}/s"
 
 
+def delete_notice(minutes: int) -> str:
+    """
+    The warning that goes under a live progress bar: this video does not stay.
+
+    Empty string when `minutes` is 0, which is how the whole feature is turned off —
+    every caller appends the result unconditionally, so "off" has to render as
+    nothing rather than as a special case at each site.
+
+    Capitals and `<b>` are the only emphasis Telegram has. There is no font size in a
+    bot message, so "big letters" means exactly this: bold, upper case, and on its own
+    line with a blank line above it so it does not read as part of the speed row.
+
+    It is worded for *before* the file arrives, because that is when it is shown — the
+    panel is live during the download and the upload, and on the Fap route it is
+    deleted the moment the video lands. "Save it" has to make sense while there is
+    still nothing to save.
+    """
+    if minutes <= 0:
+        return ""
+    unit = "MINUTE" if minutes == 1 else "MINUTES"
+    return (f"\n\n⚠️ <b>AUTO-DELETE IN {minutes} {unit}</b>\n"
+            f"<b>SAVE THE VIDEO AS SOON AS IT ARRIVES</b>")
+
+
 class Throttle:
     """Allows an action at most once every `every` seconds. Always allows the last call."""
 
@@ -71,8 +95,15 @@ class Throttle:
 
 
 def progress_block(title: str, done: int, total: int, started: float,
-                   stage: str = "") -> str:
-    """The live download/upload panel. Safe to call with total=0 (unknown size)."""
+                   stage: str = "", expires_minutes: int = 0) -> str:
+    """
+    The live download/upload panel. Safe to call with total=0 (unknown size).
+
+    `expires_minutes` appends `delete_notice`. It is a parameter rather than a read of
+    `cfg` so this module keeps importing nothing from the package — every renderer in
+    here is a pure function of its arguments, which is what lets the suites call them
+    directly with no bot, no config and no database.
+    """
     elapsed = max(0.001, time.monotonic() - started)
     speed = done / elapsed
     pct = (done / total * 100) if total else 0
@@ -89,10 +120,11 @@ def progress_block(title: str, done: int, total: int, started: float,
     else:
         lines.append(f"📦 {human_bytes(done)} transferred")
         lines.append(f"⚡ {human_speed(speed)}")
-    return "\n".join(lines)
+    return "\n".join(lines) + delete_notice(expires_minutes)
 
 
-def assembling_block(title: str, done: float, total: float, started: float) -> str:
+def assembling_block(title: str, done: float, total: float, started: float,
+                     expires_minutes: int = 0) -> str:
     """
     The live panel for an HLS fetch, where progress is measured in **seconds of
     video** rather than bytes.
@@ -106,6 +138,10 @@ def assembling_block(title: str, done: float, total: float, started: float) -> s
 
     Safe with `total=0`: a master playlist carries no `#EXTINF` of its own, so the
     length is sometimes genuinely unknown until the fetch ends.
+
+    `expires_minutes` appends `delete_notice`, same as `progress_block` — the two
+    panels are the only thing on screen for the length of a job, so the warning has to
+    be in both or a Fap user never sees it.
     """
     elapsed = max(0.001, time.monotonic() - started)
     rate = done / elapsed
@@ -120,7 +156,7 @@ def assembling_block(title: str, done: float, total: float, started: float) -> s
     else:
         lines.append(f"🎞 {human_time(done)} of video ready")
         lines.append(f"⚡ ×{rate:.1f} speed")
-    return "\n".join(lines)
+    return "\n".join(lines) + delete_notice(expires_minutes)
 
 
 #: What the wait says while it waits. Rotated rather than fixed, because one frozen

@@ -42,7 +42,7 @@ except Exception as exc:
     _config_problem(exc)
     raise SystemExit(2) from None
 
-from . import callback_server, db, media, nightly, payments, scratch, settings
+from . import callback_server, db, expiry, media, nightly, payments, scratch, settings
 from .handlers import (admin, fap, join, payment, start as start_handlers, terabox,
                        zipfiles)
 from .queue import Queue
@@ -213,6 +213,9 @@ async def run() -> None:
     await jobs.start()
     janitor = asyncio.create_task(scratch.janitor(), name="scratch-janitor")
     reporter = asyncio.create_task(nightly.run(app, jobs), name="nightly-report")
+    # The half-hour clock on delivered videos. It reads its work out of the database,
+    # so this also catches up on anything that came due while the bot was stopped.
+    reaper = asyncio.create_task(expiry.janitor(app), name="expiry-janitor")
 
     # Both only exist when there is a payment service to talk to. `serve` binds
     # 127.0.0.1 and nothing else — paysvc can move money, so it is never reachable
@@ -240,6 +243,7 @@ async def run() -> None:
     log.info("stopping…")
     janitor.cancel()
     reporter.cancel()
+    reaper.cancel()
     if catch_up is not None and not catch_up.done():
         catch_up.cancel()
     if paid_door is not None:

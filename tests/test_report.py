@@ -28,7 +28,7 @@ import tempfile                              # noqa: E402
 import time                                  # noqa: E402
 import types                                 # noqa: E402
 
-from bot import db, nightly, pdf             # noqa: E402
+from bot import db, expiry, nightly, pdf     # noqa: E402
 from bot.config import cfg                   # noqa: E402
 
 passed = failed = 0
@@ -271,6 +271,25 @@ check("so is the bot card", "📊 <b>Bot Stats</b>" in report, True)
 check("and both lanes are named", "terabox 1/6" in report and "zip 0/4" in report, True)
 check("the cookie section is there", "🔑 <b>Cookies</b>" in report, True)
 check("it fits in one Telegram message", len(report) < 4096, True)
+
+# The auto-delete queue on the server card. It is the only window an admin has onto
+# the `deletions` table: a number that climbs and never falls means the sweep has
+# stopped, which is otherwise invisible until users notice their videos staying.
+check("the half-hour clock is on the card", "🧹 Expiring   30 min" in report, True)
+check("with nothing waiting on a fresh database",
+      "0 messages on the clock" in report, True)
+
+db.execute("INSERT INTO deletions (chat_id, message_id, job_id, due_at, created_at) "
+           "VALUES (?, ?, ?, ?, ?)", (-1001234567890, 55, None, db.now() + 600, db.now()))
+check("and it counts what is queued",
+      "1 message on the clock" in asyncio.run(admin.daily_report(FakeQueue())), True)
+db.execute("DELETE FROM deletions", ())
+
+object.__setattr__(cfg, "auto_delete_minutes", 0)
+check("the line goes away entirely when auto-delete is off",
+      "🧹 Expiring" in asyncio.run(admin.daily_report(FakeQueue())), False)
+object.__setattr__(cfg, "auto_delete_minutes", 30)
+check("and the module agrees on what off means", expiry.enabled(), True)
 
 
 async def _explodes():

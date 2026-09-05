@@ -32,7 +32,7 @@ from pathlib import Path
 from pyrogram import Client, filters
 from pyrogram.types import CallbackQuery, Message
 
-from .. import (archive, credits, keyboards as kb, media, queue as jobq, scratch,
+from .. import (archive, credits, expiry, keyboards as kb, media, queue as jobq, scratch,
                 state, ui, uploader)
 from ..config import cfg
 from . import _gate
@@ -153,6 +153,11 @@ async def _deliver(client: Client, job: jobq.Job) -> None:
                     parts_used += 1
                 job.file_name = name
                 job.size_bytes += result.size_bytes
+                # The ZIP route is on the same clock as the other two. A video that went
+                # out in pieces has every piece and its rejoin note scheduled, which is
+                # what `Sent.message_ids` is for — half a split video left behind is
+                # worse than none of it.
+                expiry.remember(result, job.chat_id, job.row_id)
             except uploader.TooLarge as exc:
                 # Only reachable for a zero-byte file now — anything over the
                 # ceiling is cut into parts by `send_best_effort` instead.
@@ -233,7 +238,8 @@ async def _accept_archive(client: Client, message: Message, jobs: jobq.Queue,
         try:
             await status.edit_text(ui.progress_block(
                 "🗂 Receiving archive", current, total, started,
-                stage="downloading from Telegram"))
+                stage="downloading from Telegram",
+                expires_minutes=cfg.auto_delete_minutes))
         except Exception:
             pass
 

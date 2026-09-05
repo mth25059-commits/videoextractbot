@@ -44,7 +44,7 @@ from pathlib import Path
 from pyrogram import Client, filters
 from pyrogram.types import CallbackQuery, Message
 
-from .. import (credits, keyboards as kb, media, providers, queue as jobq,
+from .. import (credits, expiry, keyboards as kb, media, providers, queue as jobq,
                 scratch, state, ui, uploader)
 from ..config import cfg
 from ..providers.faphouse import faphouse, menu, price_of, re_pick, rungs
@@ -329,7 +329,8 @@ async def _deliver(client: Client, job: jobq.Job) -> None:
                 return
             try:
                 await status.edit_text(
-                    ui.assembling_block(_panel_title(job), done, whole, began),
+                    ui.assembling_block(_panel_title(job), done, whole, began,
+                                        expires_minutes=cfg.auto_delete_minutes),
                     reply_markup=kb.cancel_only(job.token))
             except Exception:
                 log.debug("fap: progress edit refused", exc_info=True)
@@ -356,6 +357,10 @@ async def _deliver(client: Client, job: jobq.Job) -> None:
             )
             job.file_name = name
             job.size_bytes = result.size_bytes
+            # On the clock from the moment it lands. The panel above has been saying
+            # so for the whole download, which is the only warning the user gets —
+            # it is deleted a few lines below.
+            expiry.remember(result, job.chat_id, job.row_id)
         except uploader.TooLarge as exc:
             # Only reachable above Telegram's own ceiling, since `send_best_effort`
             # splits anything over the *configured* limit into parts. Its message

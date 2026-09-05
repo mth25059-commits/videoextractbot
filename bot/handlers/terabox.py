@@ -43,7 +43,7 @@ from pathlib import Path
 from pyrogram import Client, filters
 from pyrogram.types import CallbackQuery, Message
 
-from .. import (credits, download, egress, keyboards as kb, media, providers,
+from .. import (credits, download, egress, expiry, keyboards as kb, media, providers,
                 queue as jobq, scratch, settings, state, ui, uploader)
 from ..config import cfg
 from ..providers.terabox import terabox
@@ -271,7 +271,8 @@ async def _deliver(client: Client, job: jobq.Job) -> None:
                 try:
                     await status.edit_text(
                         ui.progress_block(f"📥 {_title}", done, total, _s,
-                                          stage="downloading"),
+                                          stage="downloading",
+                                          expires_minutes=cfg.auto_delete_minutes),
                         reply_markup=kb.cancel_only(job.token))
                 except Exception:
                     pass
@@ -330,6 +331,10 @@ async def _deliver(client: Client, job: jobq.Job) -> None:
                 job.delivered = sent
                 job.file_name = name
                 job.size_bytes += result.size_bytes
+                # Each video in a folder gets its own half hour, timed from when it
+                # landed rather than from the end of the batch — a ten-link job would
+                # otherwise give the first video far longer than the last.
+                expiry.remember(result, job.chat_id, job.row_id)
             except uploader.TooLarge as exc:
                 await client.send_message(job.chat_id, exc.user_message())
             finally:
