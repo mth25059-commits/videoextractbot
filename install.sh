@@ -108,7 +108,7 @@ df -h "$APP_DIR" | tail -1 | awk '{printf "     %s free on %s\n", $4, $6}'
 # ──────────────────────────────────────────────────────────────────── the wizard
 cat <<EOF
 
-  ${c_ok}Installed.${c_off}  Now the twelve questions.
+  ${c_ok}Installed.${c_off}  Now the thirteen questions.
 
   ${c_dim}Have these ready. Anything you do not have yet can be left blank and
   added later by running the same command again:${c_off}
@@ -118,6 +118,8 @@ cat <<EOF
      3.  api_id, api_hash   my.telegram.org  →  API development tools
      4.  A Terabox cookie   terabox.com, logged in  →  F12  →  Cookies  →  ndus
      5.  Your UPI id        only if you want to sell credits
+     6.  A channel of yours  only to force people to join it — and the bot has
+                             to be an ${c_off}${c_dim}administrator${c_off}${c_dim} there, not just a member
 
 EOF
 
