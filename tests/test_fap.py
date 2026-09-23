@@ -707,16 +707,18 @@ def test_the_whole_route_from_key_to_video():
         # than quietly done, because a leaked slot would lock the user out for good.
         check("the worker loop, not _run_one, is what frees the slot",
               queue.busy(USER), 1)
-        # And the slot it holds is the *link* one, which is what the door checks. A
-        # Fap job charged against the archive lane would let a user run two links and
-        # refuse them the ZIP they can actually have — both halves of the rule wrong
-        # from one mistake, so both are asserted.
-        check("and it is the link lane it is holding",
-              queue.busy(USER, jobq.LINK_LANE), 1)
-        check("leaving the archive lane free the whole time",
+        # And the slot it holds is the *Faphouse* one, counted apart from Terabox so
+        # the two routes never lock each other out and several Faphouse links can run
+        # at once. A Fap job filed under the archive or the Terabox bucket would get
+        # the whole allowance wrong, so the bucket is named rather than trusted.
+        check("and it is the Faphouse allowance it is holding",
+              queue.busy(USER, jobq.FAP_KIND), 1)
+        check("not Terabox's, which stays open the whole time",
+              queue.busy(USER, jobq.LINK_LANE), 0)
+        check("and not the archive lane's either",
               queue.busy(USER, jobq.ZIP_LANE), 0)
         queue._release(job)
-        check("and once it does, the user may send another link", queue.busy(USER), 0)
+        check("and once it does, that slot is free again", queue.busy(USER), 0)
 
         # 5b. The URL is looked up again, at the last possible moment.
         #
@@ -949,27 +951,82 @@ def test_the_whole_route_from_key_to_video():
         check("and nothing was charged for the refusal", credits.balance(USER), 0)
         credits.grant(USER, 10, "test: refill")
 
-        # 8. One job per person, checked at the door as well as at the tap.
+        # 8. Several Faphouse links at once — the parallelism the operator asked for,
+        #    with a ceiling that still holds at the door and again at the tap.
+        #
+        #    "ek sath multi kaam ho parallel usse dekh le ye parallel sirf faphouse me":
+        #    a second Faphouse link, sent while the first is still extracting, is now
+        #    *accepted* rather than turned away. Faphouse keeps its own per-person
+        #    allowance (`FAP_KIND`), apart from Terabox's, and each link is a different
+        #    signed CDN stream — so they run side by side. Only `max_links_per_batch`
+        #    of them at once turns one away.
         state.set_mode(USER, fap.MODE, panel=panel.id, chat=USER)
-        parked_job = Msg(TRACKED, USER)
-        asyncio.run(app.handlers["got_link"](client, parked_job))
-        held_card = answered(parked_job)
-        first = next(d for d in held_card.buttons() if d.endswith(":480p"))
-        asyncio.run(app.handlers["pick_quality"](client, Press(first, held_card)))
-        running = credits.balance(USER)
-        state.set_mode(USER, fap.MODE, panel=panel.id, chat=USER)
-        while_busy = Msg(TRACKED, USER)
-        asyncio.run(app.handlers["got_link"](client, while_busy))
-        check("a second link while one is running is refused",
-              "already" in answered(while_busy).text.lower(), True)
-        check("and costs nothing", credits.balance(USER), running)
+        first_link = Msg(TRACKED, USER)
+        asyncio.run(app.handlers["got_link"](client, first_link))
+        first_menu = answered(first_link)
+        first_pick = next(d for d in first_menu.buttons() if d.endswith(":480p"))
+        asyncio.run(app.handlers["pick_quality"](client, Press(first_pick, first_menu)))
+        check("the first Faphouse link is extracting",
+              queue.busy(USER, jobq.FAP_KIND), 1)
 
-        # Leave nothing running behind this test: the held job is still queued and
-        # `stop()` is the code that owes its owner the credit back.
+        state.set_mode(USER, fap.MODE, panel=panel.id, chat=USER)
+        second_link = Msg(TRACKED, USER)
+        asyncio.run(app.handlers["got_link"](client, second_link))
+        second_menu = answered(second_link)
+        check("a second link while the first runs is offered a menu, not refused",
+              "already" in second_menu.text.lower(), False)
+        check("with its own quality buttons to tap",
+              [d for d in second_menu.buttons() if d.startswith("q:")] != [], True)
+        second_pick = next(d for d in second_menu.buttons() if d.endswith(":480p"))
+        asyncio.run(app.handlers["pick_quality"](client, Press(second_pick, second_menu)))
+        check("so both extract side by side", queue.busy(USER, jobq.FAP_KIND), 2)
+
+        # The ceiling still holds — but it is `max_links_per_batch`, not one. A menu is
+        # offered while under it, then the allowance is filled to the brim with this
+        # user's own jobs, and it is the *tap* that is refused: two menus can sit on
+        # screen before either is pressed, so the tap is the last place a link can die.
+        state.set_mode(USER, fap.MODE, panel=panel.id, chat=USER)
+        late_link = Msg(TRACKED, USER)
+        asyncio.run(app.handlers["got_link"](client, late_link))
+        late_menu = answered(late_link)
+        late_pick = next(d for d in late_menu.buttons() if d.endswith(":480p"))
+        filler = []
+        while queue.busy(USER, jobq.FAP_KIND) < cfg.max_links_per_batch:
+            j = jobq.Job(user_id=USER, chat_id=USER, kind=jobq.FAP_KIND,
+                         runner=lambda _j: None)
+            queue._hold(j)
+            filler.append(j)
+        at_ceiling = credits.balance(USER)
+        press_late = Press(late_pick, late_menu)
+        asyncio.run(app.handlers["pick_quality"](client, press_late))
+        check("at the ceiling the tap is refused",
+              "already" in "".join(press_late.answers).lower(), True)
+        check("and the tap charges nothing", credits.balance(USER), at_ceiling)
+        check("no job past the ceiling is let through",
+              queue.busy(USER, jobq.FAP_KIND), cfg.max_links_per_batch)
+
+        # And the door turns a fresh link away before the resolver is even troubled —
+        # a refusal that made an HTTP call would be paying to say no.
+        calls_at_ceiling = len(asked)
+        state.set_mode(USER, fap.MODE, panel=panel.id, chat=USER)
+        over_link = Msg(TRACKED, USER)
+        asyncio.run(app.handlers["got_link"](client, over_link))
+        over_card = answered(over_link)
+        check("at the ceiling the door refuses too",
+              "already" in over_card.text.lower(), True)
+        check("with no menu behind the refusal",
+              [d for d in over_card.buttons() if d.startswith("q:")], [])
+        check("and the resolver is spared", len(asked), calls_at_ceiling)
+        check("the door too charges nothing", credits.balance(USER), at_ceiling)
+        for j in filler:
+            queue._release(j)
+
+        # Leave nothing running behind this test: both accepted links are still queued
+        # and `stop()` is the code that owes their owner the credits back.
         stranded = credits.balance(USER)
         asyncio.run(queue.stop())
-        check("a restart refunds whatever was still queued",
-              credits.balance(USER), stranded + cfg.cost_fap_480)
+        check("a restart refunds both links that were still queued",
+              credits.balance(USER), stranded + 2 * cfg.cost_fap_480)
 
     finally:
         faphouse.__dict__.pop("resolve", None)

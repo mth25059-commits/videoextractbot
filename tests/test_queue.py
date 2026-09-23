@@ -37,7 +37,7 @@ sys.modules.update({"pyrogram": _pyrogram, "pyrogram.errors": _errors,
 
 from bot import credits, db, state          # noqa: E402
 from bot.config import cfg                  # noqa: E402
-from bot.queue import (LINK_LANE, ZIP_LANE, Job, NoSpace,  # noqa: E402
+from bot.queue import (FAP_KIND, LINK_LANE, ZIP_LANE, Job, NoSpace,  # noqa: E402
                        Queue, Rejected, lane_of)
 
 passed = failed = 0
@@ -450,13 +450,39 @@ async def main():
     check("with no key left behind for them at all", both._inflight, {})
     await both.stop()
 
-    # `lane_of` maps everything that is not an archive onto the link lane, so a Fap
-    # job and a Terabox job are one lane and remain mutually exclusive for one user.
-    # That is deliberate: they both come down the same provider pipe, and splitting
-    # them would be a third lane with its own worker count and disk headroom.
-    check("Fap shares the link lane, not a third one", lane_of("fap"), LINK_LANE)
+    # `lane_of` still puts Faphouse on the link lane's *workers* — it is not a third
+    # worker pool — but the per-person allowance is now counted per *kind*, so a
+    # person's Faphouse links and Terabox links no longer lock each other out, and
+    # several Faphouse links run at once. This is the parallelism the operator asked
+    # for ("ye parallel sirf faphouse me"): Terabox already fans a whole batch across
+    # the lane, and Faphouse now does the same, one link at a time on the way in.
+    check("Faphouse shares the link lane's workers, not a third pool",
+          lane_of("fap"), LINK_LANE)
     check("and an archive is the only thing that is not a link", lane_of("zip"),
           ZIP_LANE)
+
+    credits.grant(USER, 10.0, "test top-up")
+    kinds = Queue(client, workers=1)
+    await kinds.start()
+
+    open_gate = asyncio.Event()
+
+    async def wait_open(job):
+        await open_gate.wait()
+
+    kinds.submit(Job(user_id=USER, chat_id=CHAT, kind="terabox",
+                     runner=wait_open, cost=1.0))
+    for _ in range(3):
+        kinds.submit(Job(user_id=USER, chat_id=CHAT, kind=FAP_KIND,
+                         runner=wait_open, cost=1.0))
+    check("Terabox and Faphouse are counted apart for one person",
+          (kinds.busy(USER, LINK_LANE), kinds.busy(USER, FAP_KIND)), (1, 3))
+    check("so several Faphouse links coexist where one Terabox batch is the limit",
+          kinds.busy(USER, FAP_KIND), 3)
+    check("the archive lane is untouched by either", kinds.busy(USER, ZIP_LANE), 0)
+    check("and the total is every kind added up", kinds.busy(USER), 4)
+    await kinds.stop()
+    check("a restart clears every kind's rows", kinds._inflight, {})
 
     # --- pro-rata: an archive is one price for many videos -------------------
     #

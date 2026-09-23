@@ -466,20 +466,21 @@ WRONG_LINK = (
 
 def _busy_note(count: int) -> str:
     """
-    The refusal both link routes show, Terabox and Fap alike.
+    The refusal the Terabox route shows when a person's batch is still running.
 
-    It only ever means the **link** lane is full: the doors ask
-    `jobs.busy(user_id, jobq.LINK_LANE)`, so an archive of the same user's running
-    beside this is not what stopped them. That is worth spelling out, or somebody
-    who has just started a ZIP reads this as the bot refusing everything until it
-    is done and waits instead of pasting.
+    It means only the **Terabox** side is full: the door asks
+    `jobs.busy(user_id, jobq.LINK_LANE)`, which after the per-kind split counts a
+    person's Terabox jobs alone. A Faphouse link or an archive of theirs running
+    beside this is not what stopped them, and the note says so — or somebody who has
+    just started one of those reads this as the bot refusing everything until it is
+    done and waits instead of sending.
     """
     return (
-        f"⏳ <b>You already have {count} link(s) running</b>\n\n"
-        "One link at a time per person — that way yours gets the full speed instead "
-        "of racing itself. Send this again the moment the last video lands.\n\n"
-        "📦 <b>A ZIP is not blocked by this.</b> You can send an archive right now and "
-        "it will unpack alongside — different lane, full speed each.\n\n"
+        f"⏳ <b>You already have {count} Terabox link(s) running</b>\n\n"
+        "One batch at a time on Terabox — that way yours gets the full speed instead "
+        "of racing itself. Send more the moment the last video lands.\n\n"
+        "📦 <b>A Faphouse link or a ZIP is not blocked by this.</b> Send one right now "
+        "and it runs alongside — different pipe, full speed each.\n\n"
         "<i>Nothing was charged for this message.</i>"
     )
 

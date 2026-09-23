@@ -136,19 +136,25 @@ def _work_dir(job: jobq.Job) -> Path:
     return cfg.work_dir / f"fap-{job.user_id}-{job.row_id or int(time.time())}"
 
 
-def _busy(count: int) -> str:
+def _busy(count: int, cap: int) -> str:
     """
-    One wording for both services, imported where it is used.
+    The refusal the Faphouse route shows, but only once a person is at the ceiling.
 
-    A user with a Terabox batch running should be told the same thing here as there,
-    because it is the same limit stopping them: Fap and Terabox share the link lane
-    (`queue.lane_of` sends everything that is not an archive down it), so one link
-    of either kind is one link. An archive is a different lane and does not count —
-    the sentence saying both of those things already exists next door.
+    Faphouse keeps its own per-person allowance, apart from Terabox's: a person may
+    have several Faphouse videos extracting at once (`cfg.max_links_per_batch` of
+    them), because each is a different signed CDN stream and they do not race one
+    throttled pipe the way two of one Terabox account's links would. So this does not
+    mean "one at a time" — it fires only at the ceiling, and it names the other routes
+    as open so nobody reads it as the bot refusing everything.
     """
-    from .terabox import _busy_note
-
-    return _busy_note(count)
+    return (
+        f"⏳ <b>You already have {count} Faphouse video(s) extracting</b>\n\n"
+        f"That is the most at once per person ({cap}). The next link starts the moment "
+        "one of these lands — a slot frees as each finishes.\n\n"
+        "📦 <b>A Terabox link or a ZIP is not blocked by this.</b> Send one right now "
+        "and it runs alongside — different pipe, full speed each.\n\n"
+        "<i>Nothing was charged for this message.</i>"
+    )
 
 
 def _menu_card(resolved: providers.Resolved, options: list[tuple[providers.Stream, float]],
@@ -432,9 +438,10 @@ async def _offer(client: Client, message: Message, user_id: int, jobs: jobq.Queu
         await say(blocked, kb.back_to_menu("◀  Menu"))
         return
 
-    running = jobs.busy(user_id, jobq.LINK_LANE)
-    if running:
-        await say(_busy(running), kb.back_to_menu("◀  Menu"))
+    running = jobs.busy(user_id, jobq.FAP_KIND)
+    cap = cfg.max_links_per_batch
+    if running >= cap:
+        await say(_busy(running, cap), kb.back_to_menu("◀  Menu"))
         return
 
     # The cheapest rung, not a fixed 480p: these are settings and nothing stops an
@@ -593,10 +600,12 @@ def register(app: Client, jobs: jobq.Queue) -> None:
                             show_alert=True)
             return
 
-        running = jobs.busy(cq.from_user.id, jobq.LINK_LANE)
-        if running:
-            await cq.answer("You already have a link running.", show_alert=True)
-            await cq.message.edit_text(_busy(running),
+        running = jobs.busy(cq.from_user.id, jobq.FAP_KIND)
+        cap = cfg.max_links_per_batch
+        if running >= cap:
+            await cq.answer(f"You already have {cap} videos extracting — "
+                            "wait for one to finish.", show_alert=True)
+            await cq.message.edit_text(_busy(running, cap),
                                        reply_markup=kb.back_to_menu("◀  Menu"))
             return
 
